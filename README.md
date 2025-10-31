@@ -63,7 +63,7 @@ anim = WaveAnimation()
 anim.make_video("wave.mp4", param_by_frame=params, fps=30, num_workers=4)
 ```
 
-![](assets/simple_wave_animation.gif)
+<img src="assets/simple_wave_animation.gif" width="480"/>
 
 ## Usage
 This library has a single class: `parallel_animate.Animator`. To make an animation, you must create your own class inheriting from it and define the following methods:
@@ -84,9 +84,16 @@ Once you have defined your animator class, there is a single method that you nee
 ## Examples
 
 See [`src/parallel_animate/examples/`](https://github.com/sibocw/parallel-matplotlib-animation/blob/main/src/parallel_animate/examples/):
-- `simple_wave_animation.py`: The example above
-- `multi_panel_animation.py`: 5 subplots with different plot types
-- `very_complex_animation.py`: 14 subplots with GridSpec layout
+
+`simple_wave_animation.py`: The example above
+
+`multi_panel_animation.py`: 5 subplots with different plot types
+
+<img src="assets/multi_panel_animation.gif" width="480"/>
+
+`very_complex_animation.py`: 14 subplots with GridSpec layout
+
+<img src="assets/very_complex_animation.gif" width="480"/>
 
 
 ## Performance test
