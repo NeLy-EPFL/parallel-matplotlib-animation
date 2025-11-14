@@ -327,9 +327,7 @@ def _worker_process(
 
         # Logging
         if log_interval and frames_processed % log_interval == 0:
-            _logger.info(
-                f"Worker {worker_id}: processed {frames_processed} frames"
-            )
+            _logger.info(f"Worker {worker_id}: processed {frames_processed} frames")
 
         # Atomically increment progress counter
         with progress_counter.get_lock():
