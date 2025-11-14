@@ -240,6 +240,121 @@ class TestParallelRendering(unittest.TestCase):
             self.assertTrue(output_path.exists())
 
 
+class TestIterableParams(unittest.TestCase):
+    """Test that param_by_frame accepts various iterable types."""
+
+    def test_generator_serial(self):
+        """Serial mode should work with a generator."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "generator_serial.mp4"
+            
+            def param_generator():
+                for i in range(5):
+                    yield {"phase": 2 * np.pi * i / 5}
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=param_generator(),
+                fps=10,
+                n_frames=5,  # Must specify n_frames with generator
+                num_workers=1,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_generator_parallel(self):
+        """Parallel mode should work with a generator."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "generator_parallel.mp4"
+            
+            def param_generator():
+                for i in range(5):
+                    yield {"phase": 2 * np.pi * i / 5}
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=param_generator(),
+                fps=10,
+                n_frames=5,  # Must specify n_frames with generator
+                num_workers=2,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_tuple(self):
+        """Should work with a tuple of parameters."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "tuple.mp4"
+            params = tuple({"phase": 2 * np.pi * i / 5} for i in range(5))
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=params,
+                fps=10,
+                num_workers=1,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_range_object(self):
+        """Should work with range objects (common use case)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "range.mp4"
+            # Using range directly as params (integers as parameters)
+            
+            class RangeAnimation(Animator):
+                def setup(self):
+                    fig, ax = plt.subplots(figsize=(4, 3))
+                    self.ax = ax
+                    ax.set_xlim(0, 10)
+                    ax.set_ylim(0, 10)
+                    return fig
+                
+                def update(self, frame_idx, params):
+                    self.ax.clear()
+                    self.ax.set_xlim(0, 10)
+                    self.ax.set_ylim(0, 10)
+                    self.ax.plot([params], [params], 'ro')
+            
+            anim = RangeAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=range(5),
+                fps=10,
+                num_workers=1,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_generator_without_n_frames_fails(self):
+        """Generator without n_frames should raise ValueError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "should_fail.mp4"
+            
+            def param_generator():
+                for i in range(5):
+                    yield {"phase": 2 * np.pi * i / 5}
+
+            anim = SimpleTestAnimation()
+            with self.assertRaises(ValueError) as cm:
+                anim.make_video(
+                    output_file=output_path,
+                    param_by_frame=param_generator(),
+                    fps=10,
+                    num_workers=1,
+                    disable_progress_bar=True,
+                )
+            
+            self.assertIn("n_frames must be specified", str(cm.exception))
+
+
 class TestVideoParameters(unittest.TestCase):
     """Test various video encoding parameters."""
 

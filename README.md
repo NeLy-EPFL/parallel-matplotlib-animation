@@ -75,8 +75,9 @@ This library has a single class: `parallel_animate.Animator`. To make an animati
 Once you have defined your animator class, there is a single method that you need to call that makes the video: **`.make_video(...)`**. It accepts the following arguments:
 
 - `output_file` (Path or str): Output video path
-- `param_by_frame` (list): List of parameters. Each element in the list is the `params` argument to be given to the `.update` call for the corresponding frame.
+- `param_by_frame` (Iterable): Iterable of parameters. Each element is the `params` argument to be given to the `.update` call for the corresponding frame. Can be a list, tuple, generator, or any other iterable. Using generators is particularly useful for large data (e.g., bitmaps) to avoid loading everything into memory at once.
 - `fps` (int): Frame rate of the output video
+- `n_frames` (int or None): Number of frames to render. If None (default), the length of `param_by_frame` will be used. Must be explicitly specified if `param_by_frame` is a generator or other iterable without a length.
 - `num_workers` (int): Number of worker processes to be spawned. If -1, use all CPU cores. If -2, use all but one CPU cores, etc. If 1, no child process is created and the video is made in the main process itself. Default is -1.
 - See the docstring for `parallel_animate.animator` directly for less commonly used, optional parameters. These control logging, rendering quality, etc.
 
