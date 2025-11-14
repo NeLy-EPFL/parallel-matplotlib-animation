@@ -8,7 +8,7 @@ import time
 import multiprocessing as mp
 from pathlib import Path
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Iterable
 
 import matplotlib.pyplot as plt
 import av
@@ -60,8 +60,9 @@ class Animator(ABC):
     def make_video(
         self,
         output_file: Path | str,
-        param_by_frame: list[Any],
+        param_by_frame: Iterable[Any],
         fps: int,
+        n_frames: int | None = None,
         num_workers: int = -1,
         disable_progress_bar: bool | None = None,
         plotting_log_interval: int | None = None,
@@ -70,14 +71,18 @@ class Animator(ABC):
         video_codec: str = "libx264",
         video_params: dict[str, Any] = {"pix_fmt": "yuv420p"},
         reuse_figure_object: bool = True,
+        preload_factor: int = 8,
     ) -> None:
         """
         Render the animation to a video file.
 
         Args:
             output_file (Path | str): Path to output video file
-            param_by_frame (list[Any]): List of parameters, one per frame
+            param_by_frame (Iterable[Any]): Iterable of parameters, one per frame
             fps (int): Frames per second for output video
+            n_frames (int | None): Number of frames to render. If None, use the length
+                of param_by_frame. If param_by_frame does not have __len__ implemented,
+                n_frames must be specified.
             num_workers (int): Number of parallel workers. 1 for serial processing
                 (in the main thread), -1 for all CPU cores, -2 for all but one CPU core,
                 etc.
@@ -95,17 +100,18 @@ class Animator(ABC):
             reuse_figure_object (bool): If False, the figure will be re-created for each
                 frame (i.e. setup() called every frame). There is basically no reason to
                 set this to False. Use only for testing and benchmarking.
+            preload_factor (int): Number of workloads to prefetch in the task queue per
+                worker (approximately). I.e. each worker will have up to this many
+                frames (on average) queued ahead of time to work on.
         """
-        # Try to convert param_by_frame to list
-        try:
-            params_list = list(param_by_frame)
-        except Exception as e:
-            self.logger.critical(
-                "param_by_frame must be convertible to a list. Ensure it is a list-like object."
-            )
-            raise e
-
-        num_frames = len(params_list)
+        # Convert param_by_frame to list if it's not already
+        if n_frames is None:
+            try:
+                n_frames = len(param_by_frame)
+            except TypeError:
+                raise ValueError(
+                    "n_frames must be specified when param_by_frame has no length."
+                )
 
         # Determine number of workers
         if num_workers == -1:
@@ -113,14 +119,15 @@ class Animator(ABC):
         elif num_workers < -1:
             num_workers = max(1, mp.cpu_count() + num_workers + 1)
 
-        self.logger.info(f"Rendering {num_frames} frames at {fps} fps")
+        self.logger.info(f"Rendering {n_frames} frames at {fps} fps")
         with tempfile.TemporaryDirectory(prefix="animator_frames_") as frames_dir:
             self.logger.info(f"Using temporary directory: {frames_dir}")
 
             if num_workers == 1:
                 self.logger.info("Running in serial mode")
                 self._render_serial(
-                    params_list,
+                    param_by_frame,
+                    n_frames,
                     frames_dir,
                     disable_progress_bar,
                     plotting_log_interval,
@@ -130,13 +137,15 @@ class Animator(ABC):
             else:
                 self.logger.info(f"Running in parallel mode with {num_workers} workers")
                 self._render_parallel(
-                    params_list,
+                    param_by_frame,
+                    n_frames,
                     frames_dir,
                     num_workers,
                     disable_progress_bar,
                     plotting_log_interval,
                     savefig_params,
                     reuse_figure_object,
+                    preload_factor,
                 )
 
             self.logger.info("Creating video with PyAV")
@@ -164,7 +173,8 @@ class Animator(ABC):
 
     def _render_serial(
         self,
-        params_list: list[Any],
+        param_by_frame: Iterable[Any],
+        n_frames: int,
         frames_dir: Path | str,
         disable_progress_bar: bool | None,
         log_interval: int | None,
@@ -179,14 +189,12 @@ class Animator(ABC):
             fig = self._setup_and_check()
 
         # Render all frames with progress bar
-        num_frames = len(params_list)
-        for frame_idx in trange(
-            num_frames, desc="Rendering", disable=disable_progress_bar
+        for frame_idx, params in tqdm(
+            enumerate(param_by_frame), total=n_frames, disable=disable_progress_bar
         ):
             if not reuse_figure_object:
                 fig = self._setup_and_check()
 
-            params = params_list[frame_idx]
             self.update(frame_idx, params)
             fig.canvas.draw()
 
@@ -197,27 +205,27 @@ class Animator(ABC):
 
             # Optional interval logging
             if log_interval and (frame_idx + 1) % log_interval == 0:
-                self.logger.info(f"Frame {frame_idx + 1}/{num_frames}")
+                self.logger.info(f"Frame {frame_idx + 1}/{n_frames} rendered")
 
         plt.close(fig)
 
     def _render_parallel(
         self,
-        params_list: list[Any],
+        param_by_frame: Iterable[Any],
+        n_frames: int,
         frames_dir: Path | str,
         num_workers: int,
         disable_progress_bar: bool | None,
         log_interval: int | None,
         savefig_params: dict[str, Any],
         reuse_figure_object: bool,
+        preload_factor: int,
     ) -> None:
         """Render frames in parallel using dynamic work distribution."""
-        num_frames = len(params_list)
-
         self.logger.info(f"Using dynamic work distribution with {num_workers} workers")
 
         # Create queues for task distribution and atomic counter for progress
-        task_queue = mp.Queue()
+        task_queue = mp.Queue(maxsize=num_workers * preload_factor)
         num_frames_completed = mp.Value("i", 0)  # atomic integer counter
 
         # Start worker processes
@@ -240,22 +248,16 @@ class Animator(ABC):
             workers.append(p)
 
         # Populate task queue with individual frames (batch_size = 1)
-        for frame_idx in range(num_frames):
-            task_queue.put((frame_idx, params_list[frame_idx]))
+        # Because queue has a limited size, we push frames as workers consume them.
+        # Therefore, this is the loop that iterates as workloads are processed.
+        for frame_idx, params in tqdm(
+            enumerate(param_by_frame), total=n_frames, disable=disable_progress_bar
+        ):
+            task_queue.put((frame_idx, params))
 
         # Send sentinel values to signal workers to exit
         for _ in range(num_workers):
             task_queue.put(None)
-
-        # Monitor progress using atomic counter
-        pbar = tqdm(total=num_frames, desc="Rendering", disable=disable_progress_bar)
-        while num_frames_completed.value < num_frames:
-            current_progress = num_frames_completed.value
-            if current_progress > pbar.n:
-                pbar.update(current_progress - pbar.n)
-            time.sleep(0.1)
-        pbar.update(num_frames_completed.value - pbar.n)
-        pbar.close()
 
         # Wait for all workers to finish
         for p in workers:
