@@ -76,8 +76,9 @@ class Animator(ABC):
         plotting_log_interval: int | None = None,
         saving_log_interval: int | None = None,
         savefig_params: dict[str, Any] = {},
-        video_codec: str = "libx264",
-        video_params: dict[str, Any] = {"pix_fmt": "yuv420p"},
+        video_codec: str = "libx265",
+        video_pixfmt: str = "yuv420p",
+        video_params: dict[str, Any] = {"crf": "23", "preset": "slow"},
         reuse_figure_object: bool = True,
         preload_factor: int = 8,
     ) -> None:
@@ -163,6 +164,7 @@ class Animator(ABC):
                 output_file,
                 fps,
                 video_codec,
+                video_pixfmt,
                 video_params,
                 disable_progress_bar,
                 _logger,
@@ -342,6 +344,7 @@ def _merge_frames_into_video(
     output_file: Path | str,
     fps: int,
     video_codec: str,
+    video_pixfmt: str,
     video_params: dict[str, Any],
     disable_progress_bar: bool | None,
     logger: logging.Logger,
@@ -367,8 +370,8 @@ def _merge_frames_into_video(
         stream = container.add_stream(video_codec, rate=fps)
         stream.width = width
         stream.height = height
-        for key, value in video_params.items():
-            setattr(stream, key, value)
+        stream.pix_fmt = video_pixfmt
+        stream.options.update(video_params)
 
         # Encode each frame
         for i, frame_path in tqdm(
@@ -377,12 +380,13 @@ def _merge_frames_into_video(
             desc="Merging frames",
             disable=disable_progress_bar,
         ):
-            img = Image.open(frame_path).convert("RGBA")
+            img = Image.open(frame_path).convert("RGB")
             # Ensure image has the right size
             if img.size != (width, height):
                 img = img.resize((width, height))
 
             video_frame = av.VideoFrame.from_image(img)
+            video_frame = video_frame.reformat(width, height, format=video_pixfmt)
             for packet in stream.encode(video_frame):
                 container.mux(packet)
 
