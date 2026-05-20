@@ -209,10 +209,11 @@ class Animator(ABC):
 
         # Render all frames with progress bar
         for frame_idx, params in tqdm(
-            enumerate(list(param_by_frame)[:n_frames]),
-            total=n_frames,
-            disable=disable_progress_bar,
+            enumerate(param_by_frame), total=n_frames, disable=disable_progress_bar
         ):
+            if frame_idx == n_frames:
+                break
+
             if isinstance(params, IndexedFrameParams):
                 frame_idx = params.frame_id
                 params = params.params
@@ -277,6 +278,9 @@ class Animator(ABC):
         for frame_idx, params in tqdm(
             enumerate(param_by_frame), total=n_frames, disable=disable_progress_bar
         ):
+            if frame_idx == n_frames:
+                break
+
             if isinstance(params, IndexedFrameParams):
                 frame_idx = params.frame_id
                 params = params.params
@@ -341,7 +345,7 @@ def _worker_process(
 
     if fig is not None:
         plt.close(fig)
-    
+
     _logger.info(f"Worker {worker_id}: completed {frames_processed} frames")
 
 
@@ -386,12 +390,12 @@ def _merge_frames_into_video(
             desc="Merging frames",
             disable=disable_progress_bar,
         ):
-            img = Image.open(frame_path).convert("RGB")
-            # Ensure image has the right size
-            if img.size != (width, height):
-                img = img.resize((width, height))
+            with Image.open(frame_path).convert("RGB") as img:
+                # Ensure image has the right size
+                if img.size != (width, height):
+                    img = img.resize((width, height))
 
-            video_frame = av.VideoFrame.from_image(img)
+                video_frame = av.VideoFrame.from_image(img)
             video_frame = video_frame.reformat(width, height, format=video_pixfmt)
             for packet in stream.encode(video_frame):
                 container.mux(packet)
