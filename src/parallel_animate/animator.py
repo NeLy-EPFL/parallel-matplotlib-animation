@@ -1,3 +1,7 @@
+import matplotlib
+
+matplotlib.use("Agg")
+
 import tempfile
 import itertools
 import logging
@@ -23,6 +27,10 @@ class IndexedFrameParams:
 
     frame_id: int
     params: Any
+
+    def __post_init__(self):
+        if self.frame_id < 0:
+            raise ValueError(f"frame_id must be non-negative, got {self.frame_id}")
 
 
 class Animator(ABC):
@@ -207,12 +215,19 @@ class Animator(ABC):
         if reuse_figure_object:
             fig = self._setup_and_check()
 
+        seen_frame_ids: set[int] = set()
+        frames_processed = 0
         for frame_idx, params in tqdm(
             enumerate(itertools.islice(param_by_frame, n_frames)),
             total=n_frames,
             disable=disable_progress_bar,
         ):
             if isinstance(params, IndexedFrameParams):
+                if params.frame_id in seen_frame_ids:
+                    raise ValueError(
+                        f"Duplicate frame_id {params.frame_id} in param_by_frame"
+                    )
+                seen_frame_ids.add(params.frame_id)
                 frame_idx = params.frame_id
                 params = params.params
 
@@ -225,8 +240,9 @@ class Animator(ABC):
             if not reuse_figure_object:
                 plt.close(fig)
 
-            if log_interval and (frame_idx + 1) % log_interval == 0:
-                _logger.info(f"Frame {frame_idx + 1}/{n_frames} rendered")
+            frames_processed += 1
+            if log_interval and frames_processed % log_interval == 0:
+                _logger.info(f"Frame {frames_processed}/{n_frames} rendered")
 
         if reuse_figure_object and fig is not None:
             plt.close(fig)
@@ -272,12 +288,18 @@ class Animator(ABC):
         # workers by ~preload_factor frames. Note: tqdm here tracks enqueue speed,
         # which approximates render progress but hits 100% while workers finish the
         # last queued frames.
+        seen_frame_ids: set[int] = set()
         for frame_idx, params in tqdm(
             enumerate(itertools.islice(param_by_frame, n_frames)),
             total=n_frames,
             disable=disable_progress_bar,
         ):
             if isinstance(params, IndexedFrameParams):
+                if params.frame_id in seen_frame_ids:
+                    raise ValueError(
+                        f"Duplicate frame_id {params.frame_id} in param_by_frame"
+                    )
+                seen_frame_ids.add(params.frame_id)
                 frame_idx = params.frame_id
                 params = params.params
 
@@ -320,10 +342,6 @@ def _worker_process(
     2. Repeatedly pulls individual frames from the task queue
     3. Renders each frame
     """
-    import matplotlib
-
-    matplotlib.use("Agg")
-
     fig = None
     if reuse_figure_object:
         fig = animator._setup_and_check()
