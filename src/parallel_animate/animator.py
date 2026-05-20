@@ -75,10 +75,10 @@ class Animator(ABC):
         disable_progress_bar: bool | None = None,
         plotting_log_interval: int | None = None,
         saving_log_interval: int | None = None,
-        savefig_params: dict[str, Any] = {},
+        savefig_params: dict[str, Any] | None = None,
         video_codec: str = "libx264",
         video_pixfmt: str = "yuv420p",
-        video_params: dict[str, Any] = {"crf": "23", "preset": "slow"},
+        video_params: dict[str, Any] | None = None,
         reuse_figure_object: bool = True,
         preload_factor: int = 8,
     ) -> None:
@@ -133,6 +133,12 @@ class Animator(ABC):
         _logger.info(f"Rendering {n_frames} frames at {fps} fps")
         with tempfile.TemporaryDirectory(prefix="animator_frames_") as frames_dir:
             _logger.info(f"Using temporary directory: {frames_dir}")
+
+            # Avoid mutable default arguments by creating defaults here
+            if savefig_params is None:
+                savefig_params = {}
+            if video_params is None:
+                video_params = {"crf": "23", "preset": "slow"}
 
             if num_workers == 1:
                 _logger.info("Running in serial mode")

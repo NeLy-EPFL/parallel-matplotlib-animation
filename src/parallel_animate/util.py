@@ -8,7 +8,7 @@ _logger = logging.getLogger(__name__)
 
 
 def configure_matplotlib_style():
-    """Use san serif font and export text as texts (not shapes) in PDFs."""
+    """Use sans serif font and export text as texts (not shapes) in PDFs."""
     matplotlib.style.use("fast")
     plt.rcParams["font.family"] = "Arial"
     plt.rcParams["pdf.fonttype"] = 42
@@ -46,12 +46,19 @@ def get_rendered_frame_ids(
      np.ndarray of int
          The indices of data frames that should be rendered.
     """
-    stride = max(1, Fraction(data_fps) / (Fraction(rendered_fps) / play_speed))
+    if n_data_frames <= 0:
+        return np.array([], dtype=int)
+
+    stride = Fraction(data_fps) / (Fraction(rendered_fps) / play_speed)
     if stride < 1:
         _logger.warning(
             f"Calculated stride {stride} < 1. This will lead to repeated frames."
         )
+
     n_rendered_frames = int(n_data_frames / stride)
-    target_data_frame_ids = np.arange(n_rendered_frames) * stride
-    target_data_frame_ids = np.round(target_data_frame_ids).astype(int)
+    # Use floor so we never map to a future data frame index, then clip to valid range.
+    target_data_frame_ids = np.floor(np.arange(n_rendered_frames) * float(stride)).astype(
+        int
+    )
+    target_data_frame_ids = np.clip(target_data_frame_ids, 0, n_data_frames - 1)
     return target_data_frame_ids
