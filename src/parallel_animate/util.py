@@ -43,12 +43,10 @@ def get_rendered_frame_ids(
 
     Returns
     -------
-    mask : np.ndarray of int
-        A list of indices of data frames that should be rendered.
-    stride : float (only if return_stride is True)
-        The calculated stride between rendered frames.
+     np.ndarray of int
+         The indices of data frames that should be rendered.
     """
-    stride = Fraction(data_fps) / (Fraction(rendered_fps) / play_speed)
+    stride = max(1, Fraction(data_fps) / (Fraction(rendered_fps) / play_speed))
     if stride < 1:
         _logger.warning(
             f"Calculated stride {stride} < 1. This will lead to repeated frames."

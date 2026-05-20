@@ -430,7 +430,7 @@ class TestIndexedFrameParams(unittest.TestCase):
 
             self.assertTrue(output_path.exists())
 
-    def test_mixed_indexed_and_regular_params_fails_gracefully(self):
+    def test_mixed_indexed_and_regular_params_succeeds(self):
         """Mixing IndexedFrameParams with regular params should still work (uses index for regular)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / "mixed_params.mp4"

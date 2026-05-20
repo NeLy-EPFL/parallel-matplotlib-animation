@@ -82,7 +82,7 @@ Once you have defined your animator class, there is a single method that you nee
 - See the docstring for `parallel_animate.animator` directly for less commonly used, optional parameters. These control logging, rendering quality, etc.
 
 ### Special case: frame params arriving out-of-order in `param_by_frame`
-In some cases, frames in `param_by_frame` might be out of order. We can handle these scenarios by populating `param_by_frame`with a special `animator.IndexedFrameParams` dataclass, which specifies the frame index that overrides the ordering in `param_by_frame`. This can be useful when, for example, the animator needs to draw frames that are decoded from a video, and the dataloader for that video might return frames in nondeterministic order because it's parallelized.
+In some cases, frames in `param_by_frame` might be out of order. We can handle these scenarios by populating `param_by_frame` with a special `parallel_animate.IndexedFrameParams` dataclass, which specifies the frame index that overrides the ordering in `param_by_frame`. This can be useful when, for example, the animator needs to draw frames that are decoded from a video, and the dataloader for that video might return frames in nondeterministic order because it's parallelized.
 
 See `src/parallel_animate/examples/nondeterministic_video_loader.py` for details.
 

@@ -76,7 +76,7 @@ class Animator(ABC):
         plotting_log_interval: int | None = None,
         saving_log_interval: int | None = None,
         savefig_params: dict[str, Any] = {},
-        video_codec: str = "libx265",
+        video_codec: str = "libx264",
         video_pixfmt: str = "yuv420p",
         video_params: dict[str, Any] = {"crf": "23", "preset": "slow"},
         reuse_figure_object: bool = True,
@@ -104,8 +104,9 @@ class Animator(ABC):
             savefig_params (dict[str, Any]): Additional keyword arguments to
                 pass to plt.Figure.savefig() when saving frames (default: {}).
             video_codec (str): Codec to use for video encoding (default: "libx264").
+            video_pixfmt (str): Pixel format for video encoding (default: "yuv420p").
             video_params (dict[str, Any]): Additional parameters to set on the video
-                stream (default: {"pix_fmt": "yuv420p"}).
+                stream (default: {"crf": "23", "preset": "slow"}).
             reuse_figure_object (bool): If False, the figure will be re-created for each
                 frame (i.e. setup() called every frame). There is basically no reason to
                 set this to False. Use only for testing and benchmarking.
@@ -195,13 +196,16 @@ class Animator(ABC):
         """Render frames serially."""
         _logger.info("Serial rendering")
 
+        fig = None
         if reuse_figure_object:
             # Setup once and get figure
             fig = self._setup_and_check()
 
         # Render all frames with progress bar
         for frame_idx, params in tqdm(
-            enumerate(param_by_frame), total=n_frames, disable=disable_progress_bar
+            enumerate(list(param_by_frame)[:n_frames]),
+            total=n_frames,
+            disable=disable_progress_bar,
         ):
             if isinstance(params, IndexedFrameParams):
                 frame_idx = params.frame_id
@@ -222,7 +226,8 @@ class Animator(ABC):
             if log_interval and (frame_idx + 1) % log_interval == 0:
                 _logger.info(f"Frame {frame_idx + 1}/{n_frames} rendered")
 
-        plt.close(fig)
+        if fig is not None:
+            plt.close(fig)
 
     def _render_parallel(
         self,
@@ -241,7 +246,6 @@ class Animator(ABC):
 
         # Create queues for task distribution and atomic counter for progress
         task_queue = mp.Queue(maxsize=num_workers * preload_factor)
-        num_frames_completed = mp.Value("i", 0)  # atomic integer counter
 
         # Start worker processes
         workers = []
@@ -252,7 +256,6 @@ class Animator(ABC):
                     self,
                     worker_id,
                     task_queue,
-                    num_frames_completed,
                     frames_dir,
                     log_interval,
                     savefig_params,
@@ -289,7 +292,6 @@ def _worker_process(
     animator: Animator,
     worker_id: int,
     task_queue: mp.Queue,
-    progress_counter,
     frames_dir: Path | str,
     log_interval: int | None,
     savefig_params: dict[str, Any],
@@ -302,9 +304,9 @@ def _worker_process(
     1. Calls setup() once to initialize the figure (unless reuse_figure_object is False)
     2. Repeatedly pulls individual frames from the task queue
     3. Renders each frame
-    4. Atomically increments the progress counter
     """
     # Setup once per worker
+    fig = None
     if reuse_figure_object:
         fig = animator._setup_and_check()
 
@@ -331,11 +333,9 @@ def _worker_process(
         if log_interval and frames_processed % log_interval == 0:
             _logger.info(f"Worker {worker_id}: processed {frames_processed} frames")
 
-        # Atomically increment progress counter
-        with progress_counter.get_lock():
-            progress_counter.value += 1
-
-    plt.close(fig)
+    if fig is not None:
+        plt.close(fig)
+    
     _logger.info(f"Worker {worker_id}: completed {frames_processed} frames")
 
 
