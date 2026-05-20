@@ -3,10 +3,10 @@
 # Convert an MP4 video to a GIF with specified scale and optional frame limit.
 # Useful for creating GIFs from rendered videos for documentation.
 # Usage:
-# ./make_gif.sh input.mp4 output.gif scale max_frames
+# ./mp4_to_gif.sh input.mp4 output.gif scale max_frames
 # Example:
-# ./make_gif.sh input.mp4 output.gif 320 100   # limit to 100 frames
-# ./make_gif.sh input.mp4 output.gif 320 0     # unlimited
+# ./mp4_to_gif.sh input.mp4 output.gif 320 100   # limit to 100 frames
+# ./mp4_to_gif.sh input.mp4 output.gif 320 0     # unlimited
 
 input_path="$1"
 output_path="$2"
