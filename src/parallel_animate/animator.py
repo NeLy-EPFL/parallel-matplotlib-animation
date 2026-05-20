@@ -1,8 +1,5 @@
-import matplotlib
-
-matplotlib.use("Agg")
-
 import tempfile
+import itertools
 import logging
 import multiprocessing as mp
 import matplotlib.pyplot as plt
@@ -125,7 +122,11 @@ class Animator(ABC):
                 )
 
         # Determine number of workers
-        if num_workers == -1:
+        if num_workers == 0:
+            raise ValueError(
+                "num_workers cannot be 0. Use 1 for serial mode or -1 for all cores."
+            )
+        elif num_workers == -1:
             num_workers = mp.cpu_count()
         elif num_workers < -1:
             num_workers = max(1, mp.cpu_count() + num_workers + 1)
@@ -204,16 +205,13 @@ class Animator(ABC):
 
         fig = None
         if reuse_figure_object:
-            # Setup once and get figure
             fig = self._setup_and_check()
 
-        # Render all frames with progress bar
         for frame_idx, params in tqdm(
-            enumerate(param_by_frame), total=n_frames, disable=disable_progress_bar
+            enumerate(itertools.islice(param_by_frame, n_frames)),
+            total=n_frames,
+            disable=disable_progress_bar,
         ):
-            if frame_idx == n_frames:
-                break
-
             if isinstance(params, IndexedFrameParams):
                 frame_idx = params.frame_id
                 params = params.params
@@ -222,18 +220,15 @@ class Animator(ABC):
                 fig = self._setup_and_check()
 
             self.update(frame_idx, params)
-            fig.canvas.draw()
-
             frame_path = Path(frames_dir) / f"frame_{frame_idx:09d}.png"
             fig.savefig(frame_path, **savefig_params)
             if not reuse_figure_object:
                 plt.close(fig)
 
-            # Optional interval logging
             if log_interval and (frame_idx + 1) % log_interval == 0:
                 _logger.info(f"Frame {frame_idx + 1}/{n_frames} rendered")
 
-        if fig is not None:
+        if reuse_figure_object and fig is not None:
             plt.close(fig)
 
     def _render_parallel(
@@ -272,15 +267,16 @@ class Animator(ABC):
             p.start()
             workers.append(p)
 
-        # Populate task queue with individual frames (batch_size = 1)
-        # Because queue has a limited size, we push frames as workers consume them.
-        # Therefore, this is the loop that iterates as workloads are processed.
+        # Populate task queue with individual frames (batch_size = 1).
+        # The bounded queue naturally throttles this loop so it only runs ahead of
+        # workers by ~preload_factor frames. Note: tqdm here tracks enqueue speed,
+        # which approximates render progress but hits 100% while workers finish the
+        # last queued frames.
         for frame_idx, params in tqdm(
-            enumerate(param_by_frame), total=n_frames, disable=disable_progress_bar
+            enumerate(itertools.islice(param_by_frame, n_frames)),
+            total=n_frames,
+            disable=disable_progress_bar,
         ):
-            if frame_idx == n_frames:
-                break
-
             if isinstance(params, IndexedFrameParams):
                 frame_idx = params.frame_id
                 params = params.params
@@ -291,9 +287,18 @@ class Animator(ABC):
         for _ in range(num_workers):
             task_queue.put(None)
 
-        # Wait for all workers to finish
+        # Wait for all workers to finish and check for errors
+        failed = []
         for p in workers:
             p.join()
+            if p.exitcode != 0:
+                failed.append((p.pid, p.exitcode))
+
+        if failed:
+            details = ", ".join(
+                f"pid {pid} exited with code {code}" for pid, code in failed
+            )
+            raise RuntimeError(f"One or more worker processes failed: {details}")
 
         _logger.info("All workers completed")
 
@@ -315,31 +320,30 @@ def _worker_process(
     2. Repeatedly pulls individual frames from the task queue
     3. Renders each frame
     """
-    # Setup once per worker
+    import matplotlib
+
+    matplotlib.use("Agg")
+
     fig = None
     if reuse_figure_object:
         fig = animator._setup_and_check()
 
-    # Process frames until we get a sentinel value (None)
     frames_processed = 0
     while True:
         task = task_queue.get()
         if task is None:
-            break  # sentinel value - exit
+            break
         frame_idx, params = task
 
-        # Render the frame
         if not reuse_figure_object:
             fig = animator._setup_and_check()
         animator.update(frame_idx, params)
-        fig.canvas.draw()
         frame_path = Path(frames_dir) / f"frame_{frame_idx:09d}.png"
         fig.savefig(frame_path, **savefig_params)
         frames_processed += 1
         if not reuse_figure_object:
             plt.close(fig)
 
-        # Logging
         if log_interval and frames_processed % log_interval == 0:
             _logger.info(f"Worker {worker_id}: processed {frames_processed} frames")
 
@@ -390,7 +394,8 @@ def _merge_frames_into_video(
             desc="Merging frames",
             disable=disable_progress_bar,
         ):
-            with Image.open(frame_path).convert("RGB") as img:
+            with Image.open(frame_path) as img:
+                img = img.convert("RGB")
                 # Ensure image has the right size
                 if img.size != (width, height):
                     img = img.resize((width, height))
@@ -415,4 +420,4 @@ def _merge_frames_into_video(
 
     except Exception as e:
         logger.critical(f"PyAV failed to create video: {e}")
-        raise e
+        raise

@@ -5,10 +5,7 @@ from pathlib import Path
 from parallel_animate import Animator, IndexedFrameParams
 
 
-class MultiPanelAnimation(Animator):
-    def __init__(self):
-        super().__init__()
-
+class VideoFrameAnimation(Animator):
     def setup(self):
         fig, ax = plt.subplots(figsize=(6, 6))
         self.imshow_artist = ax.imshow(np.zeros((128, 128, 3), dtype=np.uint8))
@@ -38,7 +35,7 @@ if __name__ == "__main__":
     frame_loader = fake_video_loader(n_frames=64)
 
     # Create animation
-    anim = MultiPanelAnimation()
+    anim = VideoFrameAnimation()
     output_path = Path("example_output/nondeterministic_video_loader.mp4")
     anim.make_video(
         output_file=output_path,

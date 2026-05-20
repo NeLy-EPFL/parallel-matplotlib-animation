@@ -57,8 +57,8 @@ def get_rendered_frame_ids(
 
     n_rendered_frames = max(1, int(n_data_frames / stride))
     # Use floor so we never map to a future data frame index, then clip to valid range.
-    target_data_frame_ids = np.floor(np.arange(n_rendered_frames) * float(stride)).astype(
-        int
-    )
+    target_data_frame_ids = np.floor(
+        np.arange(n_rendered_frames) * float(stride)
+    ).astype(int)
     target_data_frame_ids = np.clip(target_data_frame_ids, 0, n_data_frames - 1)
     return target_data_frame_ids
