@@ -3,27 +3,40 @@ import matplotlib
 matplotlib.use("Agg")
 
 import tempfile
+import itertools
 import logging
-import time
 import multiprocessing as mp
-from pathlib import Path
-from abc import ABC, abstractmethod
-from typing import Any
-
 import matplotlib.pyplot as plt
 import av
 from PIL import Image
-from tqdm import tqdm, trange
+from tqdm import tqdm
+from pathlib import Path
+from abc import ABC, abstractmethod
+from typing import Any, Iterable
+from dataclasses import dataclass
+
+
+_logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IndexedFrameParams:
+    """Special dataclass to hold parameters for each frame **if frames arrive out of
+    order in the `param_by_frame` iterator**. The frame_id from this class will
+    override the index in the iterator."""
+
+    frame_id: int
+    params: Any
+
+    def __post_init__(self):
+        if self.frame_id < 0:
+            raise ValueError(f"frame_id must be non-negative, got {self.frame_id}")
 
 
 class Animator(ABC):
     """
     Base class for creating matplotlib animations with efficient parallel rendering.
     """
-
-    def __init__(self):
-        """Initialize the animator."""
-        self.logger = logging.getLogger(__name__)
 
     @abstractmethod
     def setup(self):
@@ -60,24 +73,30 @@ class Animator(ABC):
     def make_video(
         self,
         output_file: Path | str,
-        param_by_frame: list[Any],
+        param_by_frame: Iterable[Any],
         fps: int,
+        n_frames: int | None = None,
         num_workers: int = -1,
         disable_progress_bar: bool | None = None,
         plotting_log_interval: int | None = None,
         saving_log_interval: int | None = None,
-        savefig_params: dict[str, Any] = {},
+        savefig_params: dict[str, Any] | None = None,
         video_codec: str = "libx264",
-        video_params: dict[str, Any] = {"pix_fmt": "yuv420p"},
+        video_pixfmt: str = "yuv420p",
+        video_params: dict[str, Any] | None = None,
         reuse_figure_object: bool = True,
+        preload_factor: int = 8,
     ) -> None:
         """
         Render the animation to a video file.
 
         Args:
             output_file (Path | str): Path to output video file
-            param_by_frame (list[Any]): List of parameters, one per frame
+            param_by_frame (Iterable[Any]): Iterable of parameters, one per frame
             fps (int): Frames per second for output video
+            n_frames (int | None): Number of frames to render. If None, use the length
+                of param_by_frame. If param_by_frame does not have __len__ implemented
+                and n_frames is None, the progress bar won't show completion percentage.
             num_workers (int): Number of parallel workers. 1 for serial processing
                 (in the main thread), -1 for all CPU cores, -2 for all but one CPU core,
                 etc.
@@ -90,37 +109,51 @@ class Animator(ABC):
             savefig_params (dict[str, Any]): Additional keyword arguments to
                 pass to plt.Figure.savefig() when saving frames (default: {}).
             video_codec (str): Codec to use for video encoding (default: "libx264").
+            video_pixfmt (str): Pixel format for video encoding (default: "yuv420p").
             video_params (dict[str, Any]): Additional parameters to set on the video
-                stream (default: {"pix_fmt": "yuv420p"}).
+                stream (default: {"crf": "23", "preset": "slow"}).
             reuse_figure_object (bool): If False, the figure will be re-created for each
                 frame (i.e. setup() called every frame). There is basically no reason to
                 set this to False. Use only for testing and benchmarking.
+            preload_factor (int): Number of workloads to prefetch in the task queue per
+                worker (approximately). I.e. each worker will have up to this many
+                frames (on average) queued ahead of time to work on.
         """
-        # Try to convert param_by_frame to list
-        try:
-            params_list = list(param_by_frame)
-        except Exception as e:
-            self.logger.critical(
-                "param_by_frame must be convertible to a list. Ensure it is a list-like object."
-            )
-            raise e
-
-        num_frames = len(params_list)
+        # Convert param_by_frame to list if it's not already
+        if n_frames is None:
+            try:
+                n_frames = len(param_by_frame)
+            except TypeError:
+                _logger.warning(
+                    "param_by_frame has no length and n_frames is not specified. "
+                    "Progress bar won't show completion percentage."
+                )
 
         # Determine number of workers
-        if num_workers == -1:
+        if num_workers == 0:
+            raise ValueError(
+                "num_workers cannot be 0. Use 1 for serial mode or -1 for all cores."
+            )
+        elif num_workers == -1:
             num_workers = mp.cpu_count()
         elif num_workers < -1:
             num_workers = max(1, mp.cpu_count() + num_workers + 1)
 
-        self.logger.info(f"Rendering {num_frames} frames at {fps} fps")
+        _logger.info(f"Rendering {n_frames} frames at {fps} fps")
         with tempfile.TemporaryDirectory(prefix="animator_frames_") as frames_dir:
-            self.logger.info(f"Using temporary directory: {frames_dir}")
+            _logger.info(f"Using temporary directory: {frames_dir}")
+
+            # Avoid mutable default arguments by creating defaults here
+            if savefig_params is None:
+                savefig_params = {}
+            if video_params is None:
+                video_params = {"crf": "23", "preset": "slow"}
 
             if num_workers == 1:
-                self.logger.info("Running in serial mode")
+                _logger.info("Running in serial mode")
                 self._render_serial(
-                    params_list,
+                    param_by_frame,
+                    n_frames,
                     frames_dir,
                     disable_progress_bar,
                     plotting_log_interval,
@@ -128,30 +161,33 @@ class Animator(ABC):
                     reuse_figure_object,
                 )
             else:
-                self.logger.info(f"Running in parallel mode with {num_workers} workers")
+                _logger.info(f"Running in parallel mode with {num_workers} workers")
                 self._render_parallel(
-                    params_list,
+                    param_by_frame,
+                    n_frames,
                     frames_dir,
                     num_workers,
                     disable_progress_bar,
                     plotting_log_interval,
                     savefig_params,
                     reuse_figure_object,
+                    preload_factor,
                 )
 
-            self.logger.info("Creating video with PyAV")
+            _logger.info("Creating video with PyAV")
             _merge_frames_into_video(
                 frames_dir,
                 output_file,
                 fps,
                 video_codec,
+                video_pixfmt,
                 video_params,
                 disable_progress_bar,
-                self.logger,
+                _logger,
                 log_interval=saving_log_interval,
             )
 
-        self.logger.info(f"Animation complete: {output_file}")
+        _logger.info(f"Animation complete: {output_file}")
 
     def _setup_and_check(self) -> plt.Figure:
         """Call setup() and validate its return type."""
@@ -164,7 +200,8 @@ class Animator(ABC):
 
     def _render_serial(
         self,
-        params_list: list[Any],
+        param_by_frame: Iterable[Any],
+        n_frames: int,
         frames_dir: Path | str,
         disable_progress_bar: bool | None,
         log_interval: int | None,
@@ -172,53 +209,61 @@ class Animator(ABC):
         reuse_figure_object: bool,
     ) -> None:
         """Render frames serially."""
-        self.logger.info("Serial rendering")
+        _logger.info("Serial rendering")
 
+        fig = None
         if reuse_figure_object:
-            # Setup once and get figure
             fig = self._setup_and_check()
 
-        # Render all frames with progress bar
-        num_frames = len(params_list)
-        for frame_idx in trange(
-            num_frames, desc="Rendering", disable=disable_progress_bar
+        seen_frame_ids: set[int] = set()
+        frames_processed = 0
+        for frame_idx, params in tqdm(
+            enumerate(itertools.islice(param_by_frame, n_frames)),
+            total=n_frames,
+            disable=disable_progress_bar,
         ):
+            if isinstance(params, IndexedFrameParams):
+                if params.frame_id in seen_frame_ids:
+                    raise ValueError(
+                        f"Duplicate frame_id {params.frame_id} in param_by_frame"
+                    )
+                seen_frame_ids.add(params.frame_id)
+                frame_idx = params.frame_id
+                params = params.params
+
             if not reuse_figure_object:
                 fig = self._setup_and_check()
 
-            params = params_list[frame_idx]
             self.update(frame_idx, params)
-            fig.canvas.draw()
-
             frame_path = Path(frames_dir) / f"frame_{frame_idx:09d}.png"
             fig.savefig(frame_path, **savefig_params)
             if not reuse_figure_object:
                 plt.close(fig)
 
-            # Optional interval logging
-            if log_interval and (frame_idx + 1) % log_interval == 0:
-                self.logger.info(f"Frame {frame_idx + 1}/{num_frames}")
+            frames_processed += 1
+            if log_interval and frames_processed % log_interval == 0:
+                _logger.info(f"Frame {frames_processed}/{n_frames} rendered")
 
-        plt.close(fig)
+        if reuse_figure_object and fig is not None:
+            plt.close(fig)
 
     def _render_parallel(
         self,
-        params_list: list[Any],
+        param_by_frame: Iterable[Any],
+        n_frames: int,
         frames_dir: Path | str,
         num_workers: int,
         disable_progress_bar: bool | None,
         log_interval: int | None,
         savefig_params: dict[str, Any],
         reuse_figure_object: bool,
+        preload_factor: int,
     ) -> None:
         """Render frames in parallel using dynamic work distribution."""
-        num_frames = len(params_list)
-
-        self.logger.info(f"Using dynamic work distribution with {num_workers} workers")
+        _logger.info(f"Using dynamic work distribution with {num_workers} workers")
 
         # Create queues for task distribution and atomic counter for progress
-        task_queue = mp.Queue()
-        num_frames_completed = mp.Value("i", 0)  # atomic integer counter
+        task_queue = mp.Queue(maxsize=num_workers * preload_factor)
 
         # Start worker processes
         workers = []
@@ -229,7 +274,6 @@ class Animator(ABC):
                     self,
                     worker_id,
                     task_queue,
-                    num_frames_completed,
                     frames_dir,
                     log_interval,
                     savefig_params,
@@ -239,36 +283,52 @@ class Animator(ABC):
             p.start()
             workers.append(p)
 
-        # Populate task queue with individual frames (batch_size = 1)
-        for frame_idx in range(num_frames):
-            task_queue.put((frame_idx, params_list[frame_idx]))
+        # Populate task queue with individual frames (batch_size = 1).
+        # The bounded queue naturally throttles this loop so it only runs ahead of
+        # workers by ~preload_factor frames. Note: tqdm here tracks enqueue speed,
+        # which approximates render progress but hits 100% while workers finish the
+        # last queued frames.
+        seen_frame_ids: set[int] = set()
+        for frame_idx, params in tqdm(
+            enumerate(itertools.islice(param_by_frame, n_frames)),
+            total=n_frames,
+            disable=disable_progress_bar,
+        ):
+            if isinstance(params, IndexedFrameParams):
+                if params.frame_id in seen_frame_ids:
+                    raise ValueError(
+                        f"Duplicate frame_id {params.frame_id} in param_by_frame"
+                    )
+                seen_frame_ids.add(params.frame_id)
+                frame_idx = params.frame_id
+                params = params.params
+
+            task_queue.put((frame_idx, params))
 
         # Send sentinel values to signal workers to exit
         for _ in range(num_workers):
             task_queue.put(None)
 
-        # Monitor progress using atomic counter
-        pbar = tqdm(total=num_frames, desc="Rendering", disable=disable_progress_bar)
-        while num_frames_completed.value < num_frames:
-            current_progress = num_frames_completed.value
-            if current_progress > pbar.n:
-                pbar.update(current_progress - pbar.n)
-            time.sleep(0.1)
-        pbar.update(num_frames_completed.value - pbar.n)
-        pbar.close()
-
-        # Wait for all workers to finish
+        # Wait for all workers to finish and check for errors
+        failed = []
         for p in workers:
             p.join()
+            if p.exitcode != 0:
+                failed.append((p.pid, p.exitcode))
 
-        self.logger.info("All workers completed")
+        if failed:
+            details = ", ".join(
+                f"pid {pid} exited with code {code}" for pid, code in failed
+            )
+            raise RuntimeError(f"One or more worker processes failed: {details}")
+
+        _logger.info("All workers completed")
 
 
 def _worker_process(
     animator: Animator,
     worker_id: int,
     task_queue: mp.Queue,
-    progress_counter,
     frames_dir: Path | str,
     log_interval: int | None,
     savefig_params: dict[str, Any],
@@ -281,43 +341,34 @@ def _worker_process(
     1. Calls setup() once to initialize the figure (unless reuse_figure_object is False)
     2. Repeatedly pulls individual frames from the task queue
     3. Renders each frame
-    4. Atomically increments the progress counter
     """
-    # Setup once per worker
+    fig = None
     if reuse_figure_object:
         fig = animator._setup_and_check()
 
-    # Process frames until we get a sentinel value (None)
     frames_processed = 0
     while True:
         task = task_queue.get()
         if task is None:
-            break  # sentinel value - exit
+            break
         frame_idx, params = task
 
-        # Render the frame
         if not reuse_figure_object:
             fig = animator._setup_and_check()
         animator.update(frame_idx, params)
-        fig.canvas.draw()
         frame_path = Path(frames_dir) / f"frame_{frame_idx:09d}.png"
         fig.savefig(frame_path, **savefig_params)
         frames_processed += 1
         if not reuse_figure_object:
             plt.close(fig)
 
-        # Logging
         if log_interval and frames_processed % log_interval == 0:
-            animator.logger.info(
-                f"Worker {worker_id}: processed {frames_processed} frames"
-            )
+            _logger.info(f"Worker {worker_id}: processed {frames_processed} frames")
 
-        # Atomically increment progress counter
-        with progress_counter.get_lock():
-            progress_counter.value += 1
+    if fig is not None:
+        plt.close(fig)
 
-    plt.close(fig)
-    animator.logger.info(f"Worker {worker_id}: completed {frames_processed} frames")
+    _logger.info(f"Worker {worker_id}: completed {frames_processed} frames")
 
 
 def _merge_frames_into_video(
@@ -325,6 +376,7 @@ def _merge_frames_into_video(
     output_file: Path | str,
     fps: int,
     video_codec: str,
+    video_pixfmt: str,
     video_params: dict[str, Any],
     disable_progress_bar: bool | None,
     logger: logging.Logger,
@@ -350,8 +402,8 @@ def _merge_frames_into_video(
         stream = container.add_stream(video_codec, rate=fps)
         stream.width = width
         stream.height = height
-        for key, value in video_params.items():
-            setattr(stream, key, value)
+        stream.pix_fmt = video_pixfmt
+        stream.options.update(video_params)
 
         # Encode each frame
         for i, frame_path in tqdm(
@@ -360,12 +412,14 @@ def _merge_frames_into_video(
             desc="Merging frames",
             disable=disable_progress_bar,
         ):
-            img = Image.open(frame_path).convert("RGBA")
-            # Ensure image has the right size
-            if img.size != (width, height):
-                img = img.resize((width, height))
+            with Image.open(frame_path) as img:
+                img = img.convert("RGB")
+                # Ensure image has the right size
+                if img.size != (width, height):
+                    img = img.resize((width, height))
 
-            video_frame = av.VideoFrame.from_image(img)
+                video_frame = av.VideoFrame.from_image(img)
+            video_frame = video_frame.reformat(width, height, format=video_pixfmt)
             for packet in stream.encode(video_frame):
                 container.mux(packet)
 
@@ -384,4 +438,4 @@ def _merge_frames_into_video(
 
     except Exception as e:
         logger.critical(f"PyAV failed to create video: {e}")
-        raise e
+        raise

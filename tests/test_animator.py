@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from parallel_animate import Animator
+from parallel_animate import Animator, IndexedFrameParams
 
 
 class SimpleTestAnimation(Animator):
@@ -234,6 +234,244 @@ class TestParallelRendering(unittest.TestCase):
                 param_by_frame=params,
                 fps=10,
                 num_workers=-1,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+
+class TestIterableParams(unittest.TestCase):
+    """Test that param_by_frame accepts various iterable types."""
+
+    def test_generator_serial(self):
+        """Serial mode should work with a generator."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "generator_serial.mp4"
+
+            def param_generator():
+                for i in range(5):
+                    yield {"phase": 2 * np.pi * i / 5}
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=param_generator(),
+                fps=10,
+                n_frames=5,  # Must specify n_frames with generator
+                num_workers=1,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_generator_parallel(self):
+        """Parallel mode should work with a generator."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "generator_parallel.mp4"
+
+            def param_generator():
+                for i in range(5):
+                    yield {"phase": 2 * np.pi * i / 5}
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=param_generator(),
+                fps=10,
+                n_frames=5,  # Must specify n_frames with generator
+                num_workers=2,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_tuple(self):
+        """Should work with a tuple of parameters."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "tuple.mp4"
+            params = tuple({"phase": 2 * np.pi * i / 5} for i in range(5))
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=params,
+                fps=10,
+                num_workers=1,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_range_object(self):
+        """Should work with range objects (common use case)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "range.mp4"
+            # Using range directly as params (integers as parameters)
+
+            class RangeAnimation(Animator):
+                def setup(self):
+                    fig, ax = plt.subplots(figsize=(4, 3))
+                    self.ax = ax
+                    ax.set_xlim(0, 10)
+                    ax.set_ylim(0, 10)
+                    return fig
+
+                def update(self, frame_idx, params):
+                    self.ax.clear()
+                    self.ax.set_xlim(0, 10)
+                    self.ax.set_ylim(0, 10)
+                    self.ax.plot([params], [params], "ro")
+
+            anim = RangeAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=range(5),
+                fps=10,
+                num_workers=1,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+
+class TestIndexedFrameParams(unittest.TestCase):
+    """Test IndexedFrameParams for out-of-order frame handling."""
+
+    def test_indexed_params_serial_in_order(self):
+        """IndexedFrameParams should work with serial mode (in order)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "indexed_serial_in_order.mp4"
+
+            # Create params with explicit frame IDs matching order
+            params = [
+                IndexedFrameParams(frame_id=i, params={"phase": 2 * np.pi * i / 5})
+                for i in range(5)
+            ]
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=params,
+                fps=10,
+                num_workers=1,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_indexed_params_serial_out_of_order(self):
+        """IndexedFrameParams should correctly handle out-of-order frames in serial mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "indexed_serial_out_of_order.mp4"
+
+            # Create params deliberately out of order
+            params = [
+                IndexedFrameParams(frame_id=2, params={"phase": 2 * np.pi * 2 / 5}),
+                IndexedFrameParams(frame_id=0, params={"phase": 2 * np.pi * 0 / 5}),
+                IndexedFrameParams(frame_id=4, params={"phase": 2 * np.pi * 4 / 5}),
+                IndexedFrameParams(frame_id=1, params={"phase": 2 * np.pi * 1 / 5}),
+                IndexedFrameParams(frame_id=3, params={"phase": 2 * np.pi * 3 / 5}),
+            ]
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=params,
+                fps=10,
+                num_workers=1,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_indexed_params_parallel_in_order(self):
+        """IndexedFrameParams should work with parallel mode (in order)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "indexed_parallel_in_order.mp4"
+
+            params = [
+                IndexedFrameParams(frame_id=i, params={"phase": 2 * np.pi * i / 5})
+                for i in range(5)
+            ]
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=params,
+                fps=10,
+                num_workers=2,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_indexed_params_parallel_out_of_order(self):
+        """IndexedFrameParams should correctly handle out-of-order frames in parallel mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "indexed_parallel_out_of_order.mp4"
+
+            # Create params deliberately out of order
+            params = [
+                IndexedFrameParams(frame_id=2, params={"phase": 2 * np.pi * 2 / 5}),
+                IndexedFrameParams(frame_id=0, params={"phase": 2 * np.pi * 0 / 5}),
+                IndexedFrameParams(frame_id=4, params={"phase": 2 * np.pi * 4 / 5}),
+                IndexedFrameParams(frame_id=1, params={"phase": 2 * np.pi * 1 / 5}),
+                IndexedFrameParams(frame_id=3, params={"phase": 2 * np.pi * 3 / 5}),
+            ]
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=params,
+                fps=10,
+                num_workers=2,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_mixed_indexed_and_regular_params_succeeds(self):
+        """Mixing IndexedFrameParams with regular params should still work (uses index for regular)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "mixed_params.mp4"
+
+            # Mix IndexedFrameParams with regular params
+            params = [
+                {"phase": 0.0},  # Will use index 0
+                IndexedFrameParams(frame_id=3, params={"phase": 2 * np.pi * 3 / 5}),
+                {"phase": 2 * np.pi * 2 / 5},  # Will use index 2
+            ]
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=params,
+                fps=10,
+                num_workers=1,
+                disable_progress_bar=True,
+            )
+
+            self.assertTrue(output_path.exists())
+
+    def test_indexed_params_with_generator(self):
+        """IndexedFrameParams should work with generators."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "indexed_generator.mp4"
+
+            def param_generator():
+                # Generator producing out-of-order frames
+                for frame_id in [2, 0, 4, 1, 3]:
+                    yield IndexedFrameParams(
+                        frame_id=frame_id, params={"phase": 2 * np.pi * frame_id / 5}
+                    )
+
+            anim = SimpleTestAnimation()
+            anim.make_video(
+                output_file=output_path,
+                param_by_frame=param_generator(),
+                fps=10,
+                n_frames=5,
+                num_workers=1,
                 disable_progress_bar=True,
             )
 

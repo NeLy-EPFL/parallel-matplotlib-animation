@@ -75,11 +75,16 @@ This library has a single class: `parallel_animate.Animator`. To make an animati
 Once you have defined your animator class, there is a single method that you need to call that makes the video: **`.make_video(...)`**. It accepts the following arguments:
 
 - `output_file` (Path or str): Output video path
-- `param_by_frame` (list): List of parameters. Each element in the list is the `params` argument to be given to the `.update` call for the corresponding frame.
+- `param_by_frame` (Iterable): Iterable of parameters. Each element is the `params` argument to be given to the `.update` call for the corresponding frame. Can be a list, tuple, generator, or any other iterable. Using generators is particularly useful for large data (e.g., bitmaps) to avoid loading everything into memory at once.
 - `fps` (int): Frame rate of the output video
+- `n_frames` (int or None): Number of frames to render. If None, use the length of `param_by_frame`. If param_by_frame does not have `__len__` implemented and `n_frames` is None, the progress bar won't show completion percentage.
 - `num_workers` (int): Number of worker processes to be spawned. If -1, use all CPU cores. If -2, use all but one CPU cores, etc. If 1, no child process is created and the video is made in the main process itself. Default is -1.
 - See the docstring for `parallel_animate.animator` directly for less commonly used, optional parameters. These control logging, rendering quality, etc.
 
+### Special case: frame params arriving out-of-order in `param_by_frame`
+In some cases, frames in `param_by_frame` might be out of order. We can handle these scenarios by populating `param_by_frame` with a special `parallel_animate.IndexedFrameParams` dataclass, which specifies the frame index that overrides the ordering in `param_by_frame`. This can be useful when, for example, the animator needs to draw frames that are decoded from a video, and the dataloader for that video might return frames in nondeterministic order because it's parallelized.
+
+See `src/parallel_animate/examples/nondeterministic_video_loader.py` for details.
 
 ## Examples
 
@@ -94,6 +99,10 @@ See [`src/parallel_animate/examples/`](https://github.com/sibocw/parallel-matplo
 `very_complex_animation.py`: 14 subplots with GridSpec layout
 
 <img src="assets/very_complex_animation.gif" width="480"/>
+
+`nondeterministic_video_loader.py`: handling frames that arrive out of order
+
+<img src="assets/nondeterministic_video_loader.gif" width="240"/>
 
 
 ## Performance test
