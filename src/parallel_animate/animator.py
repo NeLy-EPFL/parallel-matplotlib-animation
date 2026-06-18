@@ -47,6 +47,15 @@ class Animator(ABC):
     come from rendering frames concurrently across workers rather than from
     incremental redraws. To keep each frame cheap, do expensive, frame-invariant
     setup once in ``setup()`` and only touch what changes in ``update()``.
+
+    Pickling note: in parallel mode the whole Animator instance is pickled and
+    copied into every worker process. Anything stored on ``self`` (e.g. in
+    ``__init__``) is therefore serialised once per worker — stashing a large
+    array such as an entire video tensor on an instance attribute multiplies its
+    memory across workers and adds pickling overhead. Keep heavy, per-frame data
+    out of instance attributes: pass it through ``param_by_frame`` (the intended
+    channel), or load/construct it lazily inside ``setup()`` so each worker
+    builds its own copy instead of receiving one over the pickle boundary.
     """
 
     @abstractmethod
@@ -489,6 +498,10 @@ def _worker_process(
     1. Calls setup() once to initialize the figure (unless reuse_figure_object is False)
     2. Repeatedly pulls individual frames from the task queue
     3. Renders each frame
+
+    The Animator instance is pickled and sent to every worker. See the Animator
+    class docstring for the implications of stashing large data on instance
+    attributes.
     """
     fig = None
     if reuse_figure_object:
