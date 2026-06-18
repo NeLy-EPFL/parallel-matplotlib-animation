@@ -7,6 +7,7 @@ import itertools
 import logging
 import queue
 import multiprocessing as mp
+import numpy as np
 import matplotlib.pyplot as plt
 import pvio
 from tqdm import tqdm
@@ -107,8 +108,12 @@ class Animator(ABC):
                 worker (None = no interval logging).
             saving_log_interval (int | None): Log progress every N frames when merging
                 frames into video (None = no interval logging).
-            savefig_params (dict[str, Any]): Additional keyword arguments to
-                pass to plt.Figure.savefig() when saving frames (default: {}).
+            savefig_params (dict[str, Any]): Rendering options for each frame
+                (default: {}). For speed, frames are grabbed directly from the
+                Agg canvas buffer as raw RGB pixels (no PNG encode/decode or
+                image-file round-trip), so only ``dpi`` is honoured here — it
+                sets the raster resolution. Other ``savefig``-specific options
+                such as ``bbox_inches`` do not apply to a direct buffer grab.
             video_mode (str): Encoding backend selection passed to parallel-video-io,
                 one of "auto", "gpu", or "cpu" (default: "auto"). "auto" uses the GPU
                 encoder (FFmpeg/NVENC) when a CUDA device is available and transparently
@@ -245,8 +250,7 @@ class Animator(ABC):
                 fig = self._setup_and_check()
 
             self.update(frame_idx, params)
-            frame_path = Path(frames_dir) / f"frame_{frame_idx:09d}.png"
-            fig.savefig(frame_path, **savefig_params)
+            _save_frame(fig, frames_dir, frame_idx, savefig_params)
             if not reuse_figure_object:
                 plt.close(fig)
 
@@ -339,6 +343,60 @@ class Animator(ABC):
         _logger.info("All workers completed")
 
 
+def _figure_to_rgb_array(
+    fig: plt.Figure, savefig_params: dict[str, Any]
+) -> np.ndarray:
+    """Rasterise ``fig`` to a contiguous ``(H, W, 3)`` uint8 RGB array.
+
+    Pixels are read straight from the Agg canvas buffer, skipping PNG
+    encode/decode and any image-file round-trip. Only the ``dpi`` entry of
+    ``savefig_params`` affects the result (it sets the raster resolution); other
+    ``savefig``-specific options do not apply to a direct buffer grab.
+    """
+    dpi = savefig_params.get("dpi")
+    if dpi is not None and dpi != "figure" and fig.get_dpi() != dpi:
+        fig.set_dpi(dpi)
+    fig.canvas.draw()
+    rgba = np.asarray(fig.canvas.buffer_rgba())
+    # Drop the alpha channel and return a contiguous array the encoder can consume.
+    return np.ascontiguousarray(rgba[:, :, :3])
+
+
+def _save_frame(
+    fig: plt.Figure,
+    frames_dir: Path | str,
+    frame_idx: int,
+    savefig_params: dict[str, Any],
+) -> None:
+    """Render ``fig`` and persist it as a raw ``.npy`` frame in ``frames_dir``."""
+    frame = _figure_to_rgb_array(fig, savefig_params)
+    frame_path = Path(frames_dir) / f"frame_{frame_idx:09d}.npy"
+    np.save(frame_path, frame)
+
+
+class _NpyFrameSequence:
+    """Re-iterable, lazily-loading view over frames saved as ``.npy`` files.
+
+    pvio's ``write_frames_to_video`` accepts any re-iterable yielding uint8
+    ``(H, W, C)`` arrays and may iterate it more than once (GPU→CPU fallback),
+    so frames are loaded from disk on demand rather than held in memory. It also
+    indexes ``frames[0]`` to determine the output size, hence ``__getitem__``.
+    """
+
+    def __init__(self, paths: list[Path | str]):
+        self._paths = list(paths)
+
+    def __len__(self) -> int:
+        return len(self._paths)
+
+    def __getitem__(self, index: int) -> np.ndarray:
+        return np.load(self._paths[index])
+
+    def __iter__(self):
+        for path in self._paths:
+            yield np.load(path)
+
+
 def _failed_workers(workers: list[mp.Process]) -> list[tuple[int | None, int | None]]:
     """Return (pid, exitcode) for every worker that has exited with a non-zero code.
 
@@ -419,8 +477,7 @@ def _worker_process(
         if not reuse_figure_object:
             fig = animator._setup_and_check()
         animator.update(frame_idx, params)
-        frame_path = Path(frames_dir) / f"frame_{frame_idx:09d}.png"
-        fig.savefig(frame_path, **savefig_params)
+        _save_frame(fig, frames_dir, frame_idx, savefig_params)
         frames_processed += 1
         if not reuse_figure_object:
             plt.close(fig)
@@ -448,11 +505,13 @@ def _merge_frames_into_video(
 ) -> None:
     """Use parallel-video-io (pvio) to merge frames into an H.264 MP4.
 
-    pvio handles even-dimension and pixel-format requirements internally, and picks the
-    GPU (NVENC) or CPU (libx264) encoder according to ``video_mode``.
+    Frames are stored as raw ``.npy`` RGB arrays (see :func:`_save_frame`) and
+    streamed to pvio lazily, so no PNG decode step is needed. pvio handles
+    even-dimension and pixel-format requirements internally, and picks the GPU
+    (NVENC) or CPU (libx264) encoder according to ``video_mode``.
     """
-    # Gather frame files in sorted order
-    frame_files = sorted(Path(frames_dir).glob("frame_*.png"))
+    # Gather frame files in sorted (i.e. frame-index) order
+    frame_files = sorted(Path(frames_dir).glob("frame_*.npy"))
 
     if not frame_files:
         raise RuntimeError("No frames found in temporary directory")
@@ -471,9 +530,9 @@ def _merge_frames_into_video(
         encode_kwargs["quality"] = video_quality
 
     try:
-        pvio.write_image_paths_to_video(
+        pvio.write_frames_to_video(
             output_file,
-            frame_files,
+            _NpyFrameSequence(frame_files),
             fps,
             **encode_kwargs,
         )
