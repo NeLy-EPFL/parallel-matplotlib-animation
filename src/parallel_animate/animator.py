@@ -5,10 +5,10 @@ matplotlib.use("Agg")
 import tempfile
 import itertools
 import logging
+import queue
 import multiprocessing as mp
 import matplotlib.pyplot as plt
-import av
-from PIL import Image
+import pvio
 from tqdm import tqdm
 from pathlib import Path
 from abc import ABC, abstractmethod
@@ -81,9 +81,10 @@ class Animator(ABC):
         plotting_log_interval: int | None = None,
         saving_log_interval: int | None = None,
         savefig_params: dict[str, Any] | None = None,
-        video_codec: str = "libx264",
-        video_pixfmt: str = "yuv420p",
-        video_params: dict[str, Any] | None = None,
+        video_mode: str = "auto",
+        video_quality: int | None = None,
+        video_preset: str | None = None,
+        video_extra_ffmpeg_params: list[str] | None = None,
         reuse_figure_object: bool = True,
         preload_factor: int = 8,
     ) -> None:
@@ -108,10 +109,19 @@ class Animator(ABC):
                 frames into video (None = no interval logging).
             savefig_params (dict[str, Any]): Additional keyword arguments to
                 pass to plt.Figure.savefig() when saving frames (default: {}).
-            video_codec (str): Codec to use for video encoding (default: "libx264").
-            video_pixfmt (str): Pixel format for video encoding (default: "yuv420p").
-            video_params (dict[str, Any]): Additional parameters to set on the video
-                stream (default: {"crf": "23", "preset": "slow"}).
+            video_mode (str): Encoding backend selection passed to parallel-video-io,
+                one of "auto", "gpu", or "cpu" (default: "auto"). "auto" uses the GPU
+                encoder (FFmpeg/NVENC) when a CUDA device is available and transparently
+                falls back to CPU (libx264) otherwise. "gpu" forces NVENC and "cpu"
+                forces libx264. Output is always an H.264 MP4.
+            video_quality (int | None): H.264 quantiser scale in the range 0-51, where
+                lower means higher quality / larger files. If None (default), use
+                parallel-video-io's visually-lossless default.
+            video_preset (str | None): Encoder preset. If None (default), use the
+                encoder's own default. Accepts libx264 presets ("ultrafast" … "placebo")
+                in CPU mode or NVENC presets ("p1" … "p7") in GPU mode.
+            video_extra_ffmpeg_params (list[str] | None): Extra raw FFmpeg arguments
+                appended to the encode command for advanced tuning (default: None).
             reuse_figure_object (bool): If False, the figure will be re-created for each
                 frame (i.e. setup() called every frame). There is basically no reason to
                 set this to False. Use only for testing and benchmarking.
@@ -146,8 +156,6 @@ class Animator(ABC):
             # Avoid mutable default arguments by creating defaults here
             if savefig_params is None:
                 savefig_params = {}
-            if video_params is None:
-                video_params = {"crf": "23", "preset": "slow"}
 
             if num_workers == 1:
                 _logger.info("Running in serial mode")
@@ -174,14 +182,15 @@ class Animator(ABC):
                     preload_factor,
                 )
 
-            _logger.info("Creating video with PyAV")
+            _logger.info("Creating video with parallel-video-io")
             _merge_frames_into_video(
                 frames_dir,
                 output_file,
                 fps,
-                video_codec,
-                video_pixfmt,
-                video_params,
+                video_mode,
+                video_quality,
+                video_preset,
+                video_extra_ffmpeg_params,
                 disable_progress_bar,
                 _logger,
                 log_interval=saving_log_interval,
@@ -221,6 +230,7 @@ class Animator(ABC):
             enumerate(itertools.islice(param_by_frame, n_frames)),
             total=n_frames,
             disable=disable_progress_bar,
+            desc="Rendering frames",
         ):
             if isinstance(params, IndexedFrameParams):
                 if params.frame_id in seen_frame_ids:
@@ -288,11 +298,17 @@ class Animator(ABC):
         # workers by ~preload_factor frames. Note: tqdm here tracks enqueue speed,
         # which approximates render progress but hits 100% while workers finish the
         # last queued frames.
+        #
+        # Because the queue is bounded, a worker that dies (e.g. update() raised)
+        # stops draining it; without the liveness check in _put_or_abort the queue
+        # would fill and this loop would block forever instead of surfacing the
+        # error. _put_or_abort polls worker health while it waits for space.
         seen_frame_ids: set[int] = set()
         for frame_idx, params in tqdm(
             enumerate(itertools.islice(param_by_frame, n_frames)),
             total=n_frames,
             disable=disable_progress_bar,
+            desc="Rendering frames",
         ):
             if isinstance(params, IndexedFrameParams):
                 if params.frame_id in seen_frame_ids:
@@ -303,19 +319,17 @@ class Animator(ABC):
                 frame_idx = params.frame_id
                 params = params.params
 
-            task_queue.put((frame_idx, params))
+            _put_or_abort(task_queue, (frame_idx, params), workers)
 
         # Send sentinel values to signal workers to exit
         for _ in range(num_workers):
-            task_queue.put(None)
+            _put_or_abort(task_queue, None, workers)
 
         # Wait for all workers to finish and check for errors
-        failed = []
         for p in workers:
             p.join()
-            if p.exitcode != 0:
-                failed.append((p.pid, p.exitcode))
 
+        failed = _failed_workers(workers)
         if failed:
             details = ", ".join(
                 f"pid {pid} exited with code {code}" for pid, code in failed
@@ -323,6 +337,55 @@ class Animator(ABC):
             raise RuntimeError(f"One or more worker processes failed: {details}")
 
         _logger.info("All workers completed")
+
+
+def _failed_workers(workers: list[mp.Process]) -> list[tuple[int | None, int | None]]:
+    """Return (pid, exitcode) for every worker that has exited with a non-zero code.
+
+    Workers that are still running (exitcode is None) or exited cleanly (0) are
+    excluded.
+    """
+    return [
+        (p.pid, p.exitcode) for p in workers if p.exitcode is not None and p.exitcode != 0
+    ]
+
+
+def _abort_workers(workers: list[mp.Process]) -> None:
+    """Terminate any still-running workers and reap them all.
+
+    Called when one worker has already failed: the survivors are blocked waiting
+    on a queue that will never be drained, so there is nothing to salvage.
+    """
+    for p in workers:
+        if p.is_alive():
+            p.terminate()
+    for p in workers:
+        p.join()
+
+
+def _put_or_abort(task_queue: mp.Queue, item: Any, workers: list[mp.Process]) -> None:
+    """Put ``item`` on ``task_queue``, aborting if a worker dies while we wait.
+
+    The queue is bounded, so ``put`` blocks once it is full. If a worker has
+    crashed it will never drain the queue again, which would block the producer
+    forever. Instead we put with a timeout and, whenever the queue stays full,
+    check whether any worker has died; if so we tear down the remaining workers
+    and raise rather than hang.
+    """
+    while True:
+        try:
+            task_queue.put(item, timeout=1.0)
+            return
+        except queue.Full:
+            failed = _failed_workers(workers)
+            if failed:
+                _abort_workers(workers)
+                details = ", ".join(
+                    f"pid {pid} exited with code {code}" for pid, code in failed
+                )
+                raise RuntimeError(
+                    f"One or more worker processes failed: {details}"
+                )
 
 
 def _worker_process(
@@ -375,67 +438,49 @@ def _merge_frames_into_video(
     frames_dir: Path | str,
     output_file: Path | str,
     fps: int,
-    video_codec: str,
-    video_pixfmt: str,
-    video_params: dict[str, Any],
+    video_mode: str,
+    video_quality: int | None,
+    video_preset: str | None,
+    video_extra_ffmpeg_params: list[str] | None,
     disable_progress_bar: bool | None,
     logger: logging.Logger,
     log_interval: int | None,
 ) -> None:
-    """Use PyAV to merge frames into video."""
+    """Use parallel-video-io (pvio) to merge frames into an H.264 MP4.
+
+    pvio handles even-dimension and pixel-format requirements internally, and picks the
+    GPU (NVENC) or CPU (libx264) encoder according to ``video_mode``.
+    """
     # Gather frame files in sorted order
     frame_files = sorted(Path(frames_dir).glob("frame_*.png"))
 
     if not frame_files:
         raise RuntimeError("No frames found in temporary directory")
 
-    # Open first image to determine size and ensure even dimensions
-    with Image.open(frame_files[0]) as first_img:
-        width, height = first_img.size
-    # Make width/height even (required by many codecs)
-    width = (width // 2) * 2
-    height = (height // 2) * 2
+    Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+
+    encode_kwargs: dict[str, Any] = {
+        "mode": video_mode,
+        "preset": video_preset,
+        "extra_ffmpeg_params": video_extra_ffmpeg_params,
+        "log_interval": log_interval,
+        "quiet": bool(disable_progress_bar),
+    }
+    # Only override pvio's default quality when the user requested a specific value.
+    if video_quality is not None:
+        encode_kwargs["quality"] = video_quality
 
     try:
-        Path(output_file).parent.mkdir(parents=True, exist_ok=True)
-        container = av.open(str(output_file), mode="w")
-        stream = container.add_stream(video_codec, rate=fps)
-        stream.width = width
-        stream.height = height
-        stream.pix_fmt = video_pixfmt
-        stream.options.update(video_params)
-
-        # Encode each frame
-        for i, frame_path in tqdm(
-            enumerate(frame_files),
-            total=len(frame_files),
-            desc="Merging frames",
-            disable=disable_progress_bar,
-        ):
-            with Image.open(frame_path) as img:
-                img = img.convert("RGB")
-                # Ensure image has the right size
-                if img.size != (width, height):
-                    img = img.resize((width, height))
-
-                video_frame = av.VideoFrame.from_image(img)
-            video_frame = video_frame.reformat(width, height, format=video_pixfmt)
-            for packet in stream.encode(video_frame):
-                container.mux(packet)
-
-            # Optional interval logging
-            if log_interval and (i + 1) % log_interval == 0:
-                logger.info(f"Frame written {i + 1}/{len(frame_files)} to video")
-
-        # Flush encoder
-        for packet in stream.encode(None):
-            container.mux(packet)
-
-        container.close()
+        pvio.write_image_paths_to_video(
+            output_file,
+            frame_files,
+            fps,
+            **encode_kwargs,
+        )
 
         size_mb = Path(output_file).stat().st_size / (1024 * 1024)
         logger.info(f"Video created: {output_file} ({size_mb:.2f} MB)")
 
     except Exception as e:
-        logger.critical(f"PyAV failed to create video: {e}")
+        logger.critical(f"parallel-video-io failed to create video: {e}")
         raise
