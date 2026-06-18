@@ -21,7 +21,7 @@ Renders matplotlib animations by:
 1. Creating a bunch of worker processes, and creating matplotlib resources (plt.Figure, plt.Axes, artists, etc.) once per worker
 2. Distributing frames across workers via a dynamic queue
 3. Rendering the assigned frames from each worker, but updating the data only (without redrawing the whole plot from scratch) 
-4. Encoding frames to video with PyAV (very efficient FFmpeg under the hood)
+4. Encoding frames to video with [parallel-video-io](https://github.com/sibocw/parallel-video-io) (FFmpeg under the hood, with automatic GPU/NVENC acceleration when available)
 
 **Key design: Figure reuse.** In each worker process, `setup()` runs once to create the figure, then `update()` modifies it repeatedly. This brings the best of:
 - Serial processing: avoids the overhead of recreating complex layouts for every frame
@@ -79,16 +79,20 @@ Once you have defined your animator class, there is a single method that you nee
 - `fps` (int): Frame rate of the output video
 - `n_frames` (int or None): Number of frames to render. If None, use the length of `param_by_frame`. If param_by_frame does not have `__len__` implemented and `n_frames` is None, the progress bar won't show completion percentage.
 - `num_workers` (int): Number of worker processes to be spawned. If -1, use all CPU cores. If -2, use all but one CPU cores, etc. If 1, no child process is created and the video is made in the main process itself. Default is -1.
-- See the docstring for `parallel_animate.animator` directly for less commonly used, optional parameters. These control logging, rendering quality, etc.
+- `video_mode` (str): Encoder selection passed to parallel-video-io: `"auto"` (default) uses the GPU encoder (FFmpeg/NVENC) when a CUDA device is available and falls back to CPU (libx264) otherwise; `"gpu"` forces NVENC and `"cpu"` forces libx264. Output is always an H.264 MP4.
+- `video_quality` (int or None), `video_preset` (str or None), `video_extra_ffmpeg_params` (list of str or None): Optional encoding-quality controls forwarded to parallel-video-io. Leave as `None` to use its sensible defaults.
+- See the docstring for `parallel_animate.animator` directly for the remaining less commonly used, optional parameters. These control logging, figure reuse, prefetching, etc.
+
+> **Note:** parallel-video-io is currently Linux-only.
 
 ### Special case: frame params arriving out-of-order in `param_by_frame`
 In some cases, frames in `param_by_frame` might be out of order. We can handle these scenarios by populating `param_by_frame` with a special `parallel_animate.IndexedFrameParams` dataclass, which specifies the frame index that overrides the ordering in `param_by_frame`. This can be useful when, for example, the animator needs to draw frames that are decoded from a video, and the dataloader for that video might return frames in nondeterministic order because it's parallelized.
 
-See `src/parallel_animate/examples/nondeterministic_video_loader.py` for details.
+See `examples/nondeterministic_video_loader.py` for details.
 
 ## Examples
 
-See [`src/parallel_animate/examples/`](https://github.com/sibocw/parallel-matplotlib-animation/blob/main/src/parallel_animate/examples/):
+See [`examples/`](https://github.com/sibocw/parallel-matplotlib-animation/blob/main/examples/). Run all of them (except the benchmark) with `./examples/run_all.sh`.
 
 `simple_wave_animation.py`: The example above
 
@@ -107,7 +111,7 @@ See [`src/parallel_animate/examples/`](https://github.com/sibocw/parallel-matplo
 
 ## Performance test
 
-A [strong scaling test](https://hpc-wiki.info/hpc/Scaling_tests#Strong_Scaling) is implemented in `src/parallel_animate/examples/scaling_test.py`. Here's the result on my 8-core (16-thread) Intel Core i9-11900K Processor:
+A [strong scaling test](https://hpc-wiki.info/hpc/Scaling_tests#Strong_Scaling) is implemented in `examples/scaling_test.py`. Here's the result on my 8-core (16-thread) Intel Core i9-11900K Processor:
 
 ![](assets/scaling_graph.png)
 
