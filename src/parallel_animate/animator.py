@@ -37,6 +37,16 @@ class IndexedFrameParams:
 class Animator(ABC):
     """
     Base class for creating matplotlib animations with efficient parallel rendering.
+
+    Performance note: every frame is fully rasterised — ``update()`` mutates the
+    figure and the whole canvas is then re-drawn and captured. Matplotlib's
+    blitting optimisation (re-drawing only the artists that changed via
+    ``draw_artist``/``restore_region``) is intentionally not used: frames are
+    rendered independently and, in parallel mode, in separate worker processes,
+    so there is no persistent inter-frame canvas state to blit against. Speedups
+    come from rendering frames concurrently across workers rather than from
+    incremental redraws. To keep each frame cheap, do expensive, frame-invariant
+    setup once in ``setup()`` and only touch what changes in ``update()``.
     """
 
     @abstractmethod
