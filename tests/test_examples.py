@@ -1,11 +1,19 @@
+import sys
 import unittest
 import tempfile
 import numpy as np
 from pathlib import Path
 
-from parallel_animate.examples.simple_wave_animation import WaveAnimation
-from parallel_animate.examples.multi_panel_animation import MultiPanelAnimation
-from parallel_animate.examples.very_complex_animation import VeryComplexAnimation
+# The example scripts live in the top-level examples/ directory (they are
+# standalone scripts, not part of the installable package), so make them
+# importable by module name.
+_EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
+if str(_EXAMPLES_DIR) not in sys.path:
+    sys.path.insert(0, str(_EXAMPLES_DIR))
+
+from simple_wave_animation import WaveAnimation
+from multi_panel_animation import MultiPanelAnimation
+from very_complex_animation import VeryComplexAnimation
 
 
 class TestProvidedExamples(unittest.TestCase):
