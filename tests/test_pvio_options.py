@@ -132,15 +132,44 @@ def test_logging_and_progress_options_mapped(captured_encode, tmp_path):
     assert kwargs["quiet"] is True
 
 
-def test_quiet_false_when_progress_enabled(captured_encode, tmp_path):
+def test_quiet_false_when_progress_explicitly_enabled(captured_encode, tmp_path):
     _SineAnimation().make_video(
         output_file=tmp_path / "out.mp4",
         param_by_frame=_params(5),
         fps=12,
         num_workers=1,
+        disable_progress_bar=False,
+    )
+    assert captured_encode["kwargs"]["quiet"] is False
+
+
+def test_quiet_auto_follows_tty(captured_encode, tmp_path, monkeypatch):
+    """disable_progress_bar=None resolves via TTY detection for both tqdm and pvio.
+
+    On a TTY the progress bar shows and pvio is not quiet; off a TTY both go
+    silent, instead of pvio always staying noisy.
+    """
+    import sys
+
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True, raising=False)
+    _SineAnimation().make_video(
+        output_file=tmp_path / "tty.mp4",
+        param_by_frame=_params(3),
+        fps=12,
+        num_workers=1,
         disable_progress_bar=None,
     )
     assert captured_encode["kwargs"]["quiet"] is False
+
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: False, raising=False)
+    _SineAnimation().make_video(
+        output_file=tmp_path / "notty.mp4",
+        param_by_frame=_params(3),
+        fps=12,
+        num_workers=1,
+        disable_progress_bar=None,
+    )
+    assert captured_encode["kwargs"]["quiet"] is True
 
 
 def test_frames_passed_as_sorted_raw_arrays(captured_encode, tmp_path):

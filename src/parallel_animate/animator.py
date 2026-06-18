@@ -2,6 +2,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import sys
 import tempfile
 import itertools
 import logging
@@ -151,9 +152,14 @@ class Animator(ABC):
                 set this to False. Use only for testing and benchmarking.
             preload_factor (int): Number of workloads to prefetch in the task queue per
                 worker (approximately). I.e. each worker will have up to this many
-                frames (on average) queued ahead of time to work on.
+                frames (on average) queued ahead of time to work on. Higher values
+                smooth throughput but hold more frames' params in the queue at once;
+                with large per-frame params (e.g. images) this raises peak memory by
+                roughly num_workers * preload_factor frames' worth.
         """
-        # Convert param_by_frame to list if it's not already
+        # Use the length of param_by_frame as the frame count when not given. Some
+        # iterables (e.g. generators) have no length; that's fine, but the progress
+        # bar then can't show a completion percentage.
         if n_frames is None:
             try:
                 n_frames = len(param_by_frame)
@@ -162,6 +168,12 @@ class Animator(ABC):
                     "param_by_frame has no length and n_frames is not specified. "
                     "Progress bar won't show completion percentage."
                 )
+
+        # Resolve auto (None) progress-bar disabling to a concrete bool up front so
+        # tqdm and pvio agree: when output isn't a TTY, both stay quiet. tqdm writes
+        # to stderr by default, so mirror its auto-detection on stderr.
+        if disable_progress_bar is None:
+            disable_progress_bar = not sys.stderr.isatty()
 
         # Determine number of workers
         if num_workers == 0:
@@ -248,28 +260,13 @@ class Animator(ABC):
         if reuse_figure_object:
             fig = self._setup_and_check()
 
-        seen_frame_ids: set[int] = set()
         frames_processed = 0
         for frame_idx, params in tqdm(
-            enumerate(itertools.islice(param_by_frame, n_frames)),
+            _resolved_frames(param_by_frame, n_frames),
             total=n_frames,
             disable=disable_progress_bar,
             desc="Rendering frames",
         ):
-            if isinstance(params, IndexedFrameParams):
-                frame_idx = params.frame_id
-                params = params.params
-
-            # Each frame is written to one file keyed by its index; a repeated
-            # index would silently overwrite an earlier frame. Reject duplicates,
-            # covering both repeated IndexedFrameParams ids and a collision
-            # between an explicit frame_id and a positional (enumerate) index.
-            if frame_idx in seen_frame_ids:
-                raise ValueError(
-                    f"Duplicate frame index {frame_idx} in param_by_frame"
-                )
-            seen_frame_ids.add(frame_idx)
-
             if not reuse_figure_object:
                 fig = self._setup_and_check()
 
@@ -335,27 +332,12 @@ class Animator(ABC):
         # worker crash surfaced by _put_or_abort) must tear the workers down,
         # otherwise they block forever on the queue and leak as orphans.
         try:
-            seen_frame_ids: set[int] = set()
             for frame_idx, params in tqdm(
-                enumerate(itertools.islice(param_by_frame, n_frames)),
+                _resolved_frames(param_by_frame, n_frames),
                 total=n_frames,
                 disable=disable_progress_bar,
                 desc="Rendering frames",
             ):
-                if isinstance(params, IndexedFrameParams):
-                    frame_idx = params.frame_id
-                    params = params.params
-
-                # Each frame is written to one file keyed by its index; a repeated
-                # index would silently overwrite an earlier frame. Reject duplicates,
-                # covering both repeated IndexedFrameParams ids and a collision
-                # between an explicit frame_id and a positional (enumerate) index.
-                if frame_idx in seen_frame_ids:
-                    raise ValueError(
-                        f"Duplicate frame index {frame_idx} in param_by_frame"
-                    )
-                seen_frame_ids.add(frame_idx)
-
                 _put_or_abort(task_queue, (frame_idx, params), workers)
 
             # Send sentinel values to signal workers to exit
@@ -377,6 +359,28 @@ class Animator(ABC):
             raise RuntimeError(f"One or more worker processes failed: {details}")
 
         _logger.info("All workers completed")
+
+
+def _resolved_frames(param_by_frame: Iterable[Any], n_frames: int | None):
+    """Yield ``(frame_idx, params)`` for each frame, shared by serial and parallel.
+
+    Resolves :class:`IndexedFrameParams` (its ``frame_id`` overrides the positional
+    index) and rejects duplicate frame indices: each frame is written to one file
+    keyed by its index, so a repeat — whether two identical ``frame_id``s or a
+    ``frame_id`` colliding with a positional (enumerate) index — would silently
+    overwrite an earlier frame.
+    """
+    seen_frame_ids: set[int] = set()
+    for frame_idx, params in enumerate(itertools.islice(param_by_frame, n_frames)):
+        if isinstance(params, IndexedFrameParams):
+            frame_idx = params.frame_id
+            params = params.params
+
+        if frame_idx in seen_frame_ids:
+            raise ValueError(f"Duplicate frame index {frame_idx} in param_by_frame")
+        seen_frame_ids.add(frame_idx)
+
+        yield frame_idx, params
 
 
 def _figure_to_rgb_array(
