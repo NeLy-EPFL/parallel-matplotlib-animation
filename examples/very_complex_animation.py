@@ -627,7 +627,7 @@ if __name__ == "__main__":
 
     # Create and render
     anim = VeryComplexAnimation()
-    output_path = Path("example_output/very_complex_animation.mp4")
+    output_path = Path("examples/output/very_complex_animation.mp4")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     anim.make_video(
         output_file=output_path, param_by_frame=params, fps=30, num_workers=8

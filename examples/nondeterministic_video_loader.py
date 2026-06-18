@@ -36,7 +36,7 @@ if __name__ == "__main__":
 
     # Create animation
     anim = VideoFrameAnimation()
-    output_path = Path("example_output/nondeterministic_video_loader.mp4")
+    output_path = Path("examples/output/nondeterministic_video_loader.mp4")
     anim.make_video(
         output_file=output_path,
         param_by_frame=frame_loader,
