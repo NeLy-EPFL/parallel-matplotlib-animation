@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://sibocw.github.io/parallel-matplotlib-animation/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://sibocw.github.io/parallel-matplotlib-animation/benchmark/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://sibocw.github.io/parallel-matplotlib-animation/developer/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://sibocw.github.io/parallel-matplotlib-animation/examples/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://sibocw.github.io/parallel-matplotlib-animation/installation/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://sibocw.github.io/parallel-matplotlib-animation/usage/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://sibocw.github.io/parallel-matplotlib-animation/api/animator/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+</urlset>
