@@ -466,6 +466,63 @@ class TestIndexedFrameParams(unittest.TestCase):
 
             self.assertTrue(output_path.exists())
 
+    def test_duplicate_frame_id_raises_serial(self):
+        """Repeated IndexedFrameParams frame_id must raise, not overwrite a frame."""
+        params = [
+            IndexedFrameParams(frame_id=1, params={"phase": 0.0}),
+            IndexedFrameParams(frame_id=1, params={"phase": 1.0}),
+        ]
+        anim = SimpleTestAnimation()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                anim.make_video(
+                    output_file=Path(tmpdir) / "dup.mp4",
+                    param_by_frame=params,
+                    fps=10,
+                    num_workers=1,
+                    disable_progress_bar=True,
+                )
+
+    def test_duplicate_frame_id_raises_parallel(self):
+        """Duplicate frame ids must also be rejected (and not hang) in parallel mode."""
+        params = [
+            IndexedFrameParams(frame_id=1, params={"phase": 0.0}),
+            IndexedFrameParams(frame_id=1, params={"phase": 1.0}),
+        ]
+        anim = SimpleTestAnimation()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                anim.make_video(
+                    output_file=Path(tmpdir) / "dup_parallel.mp4",
+                    param_by_frame=params,
+                    fps=10,
+                    num_workers=2,
+                    disable_progress_bar=True,
+                )
+
+    def test_indexed_and_positional_index_collision_raises(self):
+        """An explicit frame_id colliding with a positional (enumerate) index raises.
+
+        Before validation covered all indices, the positional frame at index 1
+        and the IndexedFrameParams with frame_id=1 would map to the same output
+        file and one would silently overwrite the other.
+        """
+        params = [
+            {"phase": 0.0},  # positional index 0
+            {"phase": 0.1},  # positional index 1
+            IndexedFrameParams(frame_id=1, params={"phase": 0.2}),  # collides with index 1
+        ]
+        anim = SimpleTestAnimation()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                anim.make_video(
+                    output_file=Path(tmpdir) / "collision.mp4",
+                    param_by_frame=params,
+                    fps=10,
+                    num_workers=1,
+                    disable_progress_bar=True,
+                )
+
     def test_indexed_params_with_generator(self):
         """IndexedFrameParams should work with generators."""
         with tempfile.TemporaryDirectory() as tmpdir:

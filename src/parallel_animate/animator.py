@@ -248,13 +248,18 @@ class Animator(ABC):
             desc="Rendering frames",
         ):
             if isinstance(params, IndexedFrameParams):
-                if params.frame_id in seen_frame_ids:
-                    raise ValueError(
-                        f"Duplicate frame_id {params.frame_id} in param_by_frame"
-                    )
-                seen_frame_ids.add(params.frame_id)
                 frame_idx = params.frame_id
                 params = params.params
+
+            # Each frame is written to one file keyed by its index; a repeated
+            # index would silently overwrite an earlier frame. Reject duplicates,
+            # covering both repeated IndexedFrameParams ids and a collision
+            # between an explicit frame_id and a positional (enumerate) index.
+            if frame_idx in seen_frame_ids:
+                raise ValueError(
+                    f"Duplicate frame index {frame_idx} in param_by_frame"
+                )
+            seen_frame_ids.add(frame_idx)
 
             if not reuse_figure_object:
                 fig = self._setup_and_check()
@@ -317,31 +322,43 @@ class Animator(ABC):
         # stops draining it; without the liveness check in _put_or_abort the queue
         # would fill and this loop would block forever instead of surfacing the
         # error. _put_or_abort polls worker health while it waits for space.
-        seen_frame_ids: set[int] = set()
-        for frame_idx, params in tqdm(
-            enumerate(itertools.islice(param_by_frame, n_frames)),
-            total=n_frames,
-            disable=disable_progress_bar,
-            desc="Rendering frames",
-        ):
-            if isinstance(params, IndexedFrameParams):
-                if params.frame_id in seen_frame_ids:
+        # Any failure once workers are running (a validation error here, or a
+        # worker crash surfaced by _put_or_abort) must tear the workers down,
+        # otherwise they block forever on the queue and leak as orphans.
+        try:
+            seen_frame_ids: set[int] = set()
+            for frame_idx, params in tqdm(
+                enumerate(itertools.islice(param_by_frame, n_frames)),
+                total=n_frames,
+                disable=disable_progress_bar,
+                desc="Rendering frames",
+            ):
+                if isinstance(params, IndexedFrameParams):
+                    frame_idx = params.frame_id
+                    params = params.params
+
+                # Each frame is written to one file keyed by its index; a repeated
+                # index would silently overwrite an earlier frame. Reject duplicates,
+                # covering both repeated IndexedFrameParams ids and a collision
+                # between an explicit frame_id and a positional (enumerate) index.
+                if frame_idx in seen_frame_ids:
                     raise ValueError(
-                        f"Duplicate frame_id {params.frame_id} in param_by_frame"
+                        f"Duplicate frame index {frame_idx} in param_by_frame"
                     )
-                seen_frame_ids.add(params.frame_id)
-                frame_idx = params.frame_id
-                params = params.params
+                seen_frame_ids.add(frame_idx)
 
-            _put_or_abort(task_queue, (frame_idx, params), workers)
+                _put_or_abort(task_queue, (frame_idx, params), workers)
 
-        # Send sentinel values to signal workers to exit
-        for _ in range(num_workers):
-            _put_or_abort(task_queue, None, workers)
+            # Send sentinel values to signal workers to exit
+            for _ in range(num_workers):
+                _put_or_abort(task_queue, None, workers)
 
-        # Wait for all workers to finish and check for errors
-        for p in workers:
-            p.join()
+            # Wait for all workers to finish and check for errors
+            for p in workers:
+                p.join()
+        except BaseException:
+            _abort_workers(workers)
+            raise
 
         failed = _failed_workers(workers)
         if failed:
