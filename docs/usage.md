@@ -72,8 +72,8 @@ explicit `frame_id` that overrides the iterator ordering:
 from parallel_animate import IndexedFrameParams
 
 param_by_frame = [
-    IndexedFrameParams(frame_id=5, params={"phase": ...}),
-    IndexedFrameParams(frame_id=0, params={"phase": ...}),
+    IndexedFrameParams(frame_id=5, params={"frame": ...}),
+    IndexedFrameParams(frame_id=0, params={"frame": ...}),
     # ...
 ]
 ```
