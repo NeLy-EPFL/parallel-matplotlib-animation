@@ -37,7 +37,7 @@ from parallel_animate import Animator
 # Step 1: Create a child class of parallel_animate.Animator
 class WaveAnimation(Animator):
 
-    # Step 2: Define how the plot should be setup
+    # Step 2: Define how the plot should be set up
     def setup(self):
         fig, ax = plt.subplots()
         self.x = np.linspace(0, 4 * np.pi, 200)
@@ -58,7 +58,7 @@ class WaveAnimation(Animator):
 # Step 4: Define a list of input parameters, one for each frame
 params = [{"phase": 2 * np.pi * i / 60} for i in range(60)]
 
-# Step 5: Make video in parallel
+# Step 5: Make the video in parallel
 anim = WaveAnimation()
 anim.make_video("wave.mp4", param_by_frame=params, fps=30, num_workers=4)
 ```
