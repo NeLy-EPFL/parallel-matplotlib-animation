@@ -1,6 +1,8 @@
 name: Deploy Docs
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
 
@@ -16,6 +18,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
         with:
@@ -23,6 +30,11 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --frozen --extra dev
+
+      - name: Render example videos
+        # The gallery MP4s are git-ignored, so render them here. The
+        # embed_example_videos.py MkDocs hook copies them into the built site.
+        run: uv run bash examples/run_all_except_benchmarks.sh
 
       - name: Deploy docs to GitHub Pages
         run: uv run mkdocs gh-deploy --force --clean
