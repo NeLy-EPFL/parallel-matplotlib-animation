@@ -1,11 +1,20 @@
+import sys
 import unittest
 import tempfile
 import numpy as np
 from pathlib import Path
 
-from parallel_animate.examples.simple_wave_animation import WaveAnimation
-from parallel_animate.examples.multi_panel_animation import MultiPanelAnimation
-from parallel_animate.examples.very_complex_animation import VeryComplexAnimation
+# The example scripts live in the top-level examples/ directory (they are
+# standalone scripts, not part of the installable package), so make them
+# importable by module name.
+_EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
+if str(_EXAMPLES_DIR) not in sys.path:
+    sys.path.insert(0, str(_EXAMPLES_DIR))
+
+from simple_wave_animation import WaveAnimation
+from multi_panel_animation import MultiPanelAnimation
+from very_complex_animation import VeryComplexAnimation
+from nondeterministic_video_loader import VideoFrameAnimation, fake_video_loader
 
 
 class TestProvidedExamples(unittest.TestCase):
@@ -41,6 +50,28 @@ class TestProvidedExamples(unittest.TestCase):
 
     def test_very_complex_animation_setup_serial(self):
         self._run_animation(VeryComplexAnimation, num_workers=1)
+
+    def _run_video_frame_animation(self, num_workers):
+        # This example feeds frames through a generator that yields them in
+        # nondeterministic order (wrapped in IndexedFrameParams), so it needs an
+        # explicit n_frames (a generator has no __len__).
+        n_frames = 8
+        with tempfile.TemporaryDirectory() as tmpdir:
+            anim = VideoFrameAnimation()
+            anim.make_video(
+                output_file=Path(tmpdir)
+                / f"VideoFrameAnimation_{num_workers}_workers.mp4",
+                param_by_frame=fake_video_loader(n_frames=n_frames),
+                n_frames=n_frames,
+                fps=30,
+                num_workers=num_workers,
+            )
+
+    def test_video_frame_animation_setup_parallel(self):
+        self._run_video_frame_animation(num_workers=4)
+
+    def test_video_frame_animation_setup_serial(self):
+        self._run_video_frame_animation(num_workers=1)
 
 
 if __name__ == "__main__":

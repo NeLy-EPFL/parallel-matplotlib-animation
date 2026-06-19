@@ -2,13 +2,15 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import sys
 import tempfile
 import itertools
 import logging
+import queue
 import multiprocessing as mp
+import numpy as np
 import matplotlib.pyplot as plt
-import av
-from PIL import Image
+import pvio
 from tqdm import tqdm
 from pathlib import Path
 from abc import ABC, abstractmethod
@@ -36,6 +38,25 @@ class IndexedFrameParams:
 class Animator(ABC):
     """
     Base class for creating matplotlib animations with efficient parallel rendering.
+
+    Performance note: every frame is fully rasterised — ``update()`` mutates the
+    figure and the whole canvas is then re-drawn and captured. Matplotlib's
+    blitting optimisation (re-drawing only the artists that changed via
+    ``draw_artist``/``restore_region``) is intentionally not used: frames are
+    rendered independently and, in parallel mode, in separate worker processes,
+    so there is no persistent inter-frame canvas state to blit against. Speedups
+    come from rendering frames concurrently across workers rather than from
+    incremental redraws. To keep each frame cheap, do expensive, frame-invariant
+    setup once in ``setup()`` and only touch what changes in ``update()``.
+
+    Pickling note: in parallel mode the whole Animator instance is pickled and
+    copied into every worker process. Anything stored on ``self`` (e.g. in
+    ``__init__``) is therefore serialised once per worker — stashing a large
+    array such as an entire video tensor on an instance attribute multiplies its
+    memory across workers and adds pickling overhead. Keep heavy, per-frame data
+    out of instance attributes: pass it through ``param_by_frame`` (the intended
+    channel), or load/construct it lazily inside ``setup()`` so each worker
+    builds its own copy instead of receiving one over the pickle boundary.
     """
 
     @abstractmethod
@@ -81,9 +102,10 @@ class Animator(ABC):
         plotting_log_interval: int | None = None,
         saving_log_interval: int | None = None,
         savefig_params: dict[str, Any] | None = None,
-        video_codec: str = "libx264",
-        video_pixfmt: str = "yuv420p",
-        video_params: dict[str, Any] | None = None,
+        video_mode: str = "auto",
+        video_quality: int | None = None,
+        video_preset: str | None = None,
+        video_extra_ffmpeg_params: list[str] | None = None,
         reuse_figure_object: bool = True,
         preload_factor: int = 8,
     ) -> None:
@@ -106,20 +128,38 @@ class Animator(ABC):
                 worker (None = no interval logging).
             saving_log_interval (int | None): Log progress every N frames when merging
                 frames into video (None = no interval logging).
-            savefig_params (dict[str, Any]): Additional keyword arguments to
-                pass to plt.Figure.savefig() when saving frames (default: {}).
-            video_codec (str): Codec to use for video encoding (default: "libx264").
-            video_pixfmt (str): Pixel format for video encoding (default: "yuv420p").
-            video_params (dict[str, Any]): Additional parameters to set on the video
-                stream (default: {"crf": "23", "preset": "slow"}).
+            savefig_params (dict[str, Any]): Rendering options for each frame
+                (default: {}). For speed, frames are grabbed directly from the
+                Agg canvas buffer as raw RGB pixels (no PNG encode/decode or
+                image-file round-trip), so only ``dpi`` is honoured here — it
+                sets the raster resolution. Other ``savefig``-specific options
+                such as ``bbox_inches`` do not apply to a direct buffer grab.
+            video_mode (str): Encoding backend selection passed to parallel-video-io,
+                one of "auto", "gpu", or "cpu" (default: "auto"). "auto" uses the GPU
+                encoder (FFmpeg/NVENC) when a CUDA device is available and transparently
+                falls back to CPU (libx264) otherwise. "gpu" forces NVENC and "cpu"
+                forces libx264. Output is always an H.264 MP4.
+            video_quality (int | None): H.264 quantiser scale in the range 0-51, where
+                lower means higher quality / larger files. If None (default), use
+                parallel-video-io's visually-lossless default.
+            video_preset (str | None): Encoder preset. If None (default), use the
+                encoder's own default. Accepts libx264 presets ("ultrafast" … "placebo")
+                in CPU mode or NVENC presets ("p1" … "p7") in GPU mode.
+            video_extra_ffmpeg_params (list[str] | None): Extra raw FFmpeg arguments
+                appended to the encode command for advanced tuning (default: None).
             reuse_figure_object (bool): If False, the figure will be re-created for each
                 frame (i.e. setup() called every frame). There is basically no reason to
                 set this to False. Use only for testing and benchmarking.
             preload_factor (int): Number of workloads to prefetch in the task queue per
                 worker (approximately). I.e. each worker will have up to this many
-                frames (on average) queued ahead of time to work on.
+                frames (on average) queued ahead of time to work on. Higher values
+                smooth throughput but hold more frames' params in the queue at once;
+                with large per-frame params (e.g. images) this raises peak memory by
+                roughly num_workers * preload_factor frames' worth.
         """
-        # Convert param_by_frame to list if it's not already
+        # Use the length of param_by_frame as the frame count when not given. Some
+        # iterables (e.g. generators) have no length; that's fine, but the progress
+        # bar then can't show a completion percentage.
         if n_frames is None:
             try:
                 n_frames = len(param_by_frame)
@@ -128,6 +168,12 @@ class Animator(ABC):
                     "param_by_frame has no length and n_frames is not specified. "
                     "Progress bar won't show completion percentage."
                 )
+
+        # Resolve auto (None) progress-bar disabling to a concrete bool up front so
+        # tqdm and pvio agree: when output isn't a TTY, both stay quiet. tqdm writes
+        # to stderr by default, so mirror its auto-detection on stderr.
+        if disable_progress_bar is None:
+            disable_progress_bar = not sys.stderr.isatty()
 
         # Determine number of workers
         if num_workers == 0:
@@ -146,8 +192,6 @@ class Animator(ABC):
             # Avoid mutable default arguments by creating defaults here
             if savefig_params is None:
                 savefig_params = {}
-            if video_params is None:
-                video_params = {"crf": "23", "preset": "slow"}
 
             if num_workers == 1:
                 _logger.info("Running in serial mode")
@@ -174,14 +218,15 @@ class Animator(ABC):
                     preload_factor,
                 )
 
-            _logger.info("Creating video with PyAV")
+            _logger.info("Creating video with parallel-video-io")
             _merge_frames_into_video(
                 frames_dir,
                 output_file,
                 fps,
-                video_codec,
-                video_pixfmt,
-                video_params,
+                video_mode,
+                video_quality,
+                video_preset,
+                video_extra_ffmpeg_params,
                 disable_progress_bar,
                 _logger,
                 log_interval=saving_log_interval,
@@ -215,28 +260,18 @@ class Animator(ABC):
         if reuse_figure_object:
             fig = self._setup_and_check()
 
-        seen_frame_ids: set[int] = set()
         frames_processed = 0
         for frame_idx, params in tqdm(
-            enumerate(itertools.islice(param_by_frame, n_frames)),
+            _resolved_frames(param_by_frame, n_frames),
             total=n_frames,
             disable=disable_progress_bar,
+            desc="Rendering frames",
         ):
-            if isinstance(params, IndexedFrameParams):
-                if params.frame_id in seen_frame_ids:
-                    raise ValueError(
-                        f"Duplicate frame_id {params.frame_id} in param_by_frame"
-                    )
-                seen_frame_ids.add(params.frame_id)
-                frame_idx = params.frame_id
-                params = params.params
-
             if not reuse_figure_object:
                 fig = self._setup_and_check()
 
             self.update(frame_idx, params)
-            frame_path = Path(frames_dir) / f"frame_{frame_idx:09d}.png"
-            fig.savefig(frame_path, **savefig_params)
+            _save_frame(fig, frames_dir, frame_idx, savefig_params)
             if not reuse_figure_object:
                 plt.close(fig)
 
@@ -288,34 +323,35 @@ class Animator(ABC):
         # workers by ~preload_factor frames. Note: tqdm here tracks enqueue speed,
         # which approximates render progress but hits 100% while workers finish the
         # last queued frames.
-        seen_frame_ids: set[int] = set()
-        for frame_idx, params in tqdm(
-            enumerate(itertools.islice(param_by_frame, n_frames)),
-            total=n_frames,
-            disable=disable_progress_bar,
-        ):
-            if isinstance(params, IndexedFrameParams):
-                if params.frame_id in seen_frame_ids:
-                    raise ValueError(
-                        f"Duplicate frame_id {params.frame_id} in param_by_frame"
-                    )
-                seen_frame_ids.add(params.frame_id)
-                frame_idx = params.frame_id
-                params = params.params
+        #
+        # Because the queue is bounded, a worker that dies (e.g. update() raised)
+        # stops draining it; without the liveness check in _put_or_abort the queue
+        # would fill and this loop would block forever instead of surfacing the
+        # error. _put_or_abort polls worker health while it waits for space.
+        # Any failure once workers are running (a validation error here, or a
+        # worker crash surfaced by _put_or_abort) must tear the workers down,
+        # otherwise they block forever on the queue and leak as orphans.
+        try:
+            for frame_idx, params in tqdm(
+                _resolved_frames(param_by_frame, n_frames),
+                total=n_frames,
+                disable=disable_progress_bar,
+                desc="Rendering frames",
+            ):
+                _put_or_abort(task_queue, (frame_idx, params), workers)
 
-            task_queue.put((frame_idx, params))
+            # Send sentinel values to signal workers to exit
+            for _ in range(num_workers):
+                _put_or_abort(task_queue, None, workers)
 
-        # Send sentinel values to signal workers to exit
-        for _ in range(num_workers):
-            task_queue.put(None)
+            # Wait for all workers to finish and check for errors
+            for p in workers:
+                p.join()
+        except BaseException:
+            _abort_workers(workers)
+            raise
 
-        # Wait for all workers to finish and check for errors
-        failed = []
-        for p in workers:
-            p.join()
-            if p.exitcode != 0:
-                failed.append((p.pid, p.exitcode))
-
+        failed = _failed_workers(workers)
         if failed:
             details = ", ".join(
                 f"pid {pid} exited with code {code}" for pid, code in failed
@@ -323,6 +359,129 @@ class Animator(ABC):
             raise RuntimeError(f"One or more worker processes failed: {details}")
 
         _logger.info("All workers completed")
+
+
+def _resolved_frames(param_by_frame: Iterable[Any], n_frames: int | None):
+    """Yield ``(frame_idx, params)`` for each frame, shared by serial and parallel.
+
+    Resolves :class:`IndexedFrameParams` (its ``frame_id`` overrides the positional
+    index) and rejects duplicate frame indices: each frame is written to one file
+    keyed by its index, so a repeat — whether two identical ``frame_id``s or a
+    ``frame_id`` colliding with a positional (enumerate) index — would silently
+    overwrite an earlier frame.
+    """
+    seen_frame_ids: set[int] = set()
+    for frame_idx, params in enumerate(itertools.islice(param_by_frame, n_frames)):
+        if isinstance(params, IndexedFrameParams):
+            frame_idx = params.frame_id
+            params = params.params
+
+        if frame_idx in seen_frame_ids:
+            raise ValueError(f"Duplicate frame index {frame_idx} in param_by_frame")
+        seen_frame_ids.add(frame_idx)
+
+        yield frame_idx, params
+
+
+def _figure_to_rgb_array(fig: plt.Figure, savefig_params: dict[str, Any]) -> np.ndarray:
+    """Rasterise ``fig`` to a contiguous ``(H, W, 3)`` uint8 RGB array.
+
+    Pixels are read straight from the Agg canvas buffer, skipping PNG
+    encode/decode and any image-file round-trip. Only the ``dpi`` entry of
+    ``savefig_params`` affects the result (it sets the raster resolution); other
+    ``savefig``-specific options do not apply to a direct buffer grab.
+    """
+    dpi = savefig_params.get("dpi")
+    if dpi is not None and dpi != "figure" and fig.get_dpi() != dpi:
+        fig.set_dpi(dpi)
+    fig.canvas.draw()
+    rgba = np.asarray(fig.canvas.buffer_rgba())
+    # Drop the alpha channel and return a contiguous array the encoder can consume.
+    return np.ascontiguousarray(rgba[:, :, :3])
+
+
+def _save_frame(
+    fig: plt.Figure,
+    frames_dir: Path | str,
+    frame_idx: int,
+    savefig_params: dict[str, Any],
+) -> None:
+    """Render ``fig`` and persist it as a raw ``.npy`` frame in ``frames_dir``."""
+    frame = _figure_to_rgb_array(fig, savefig_params)
+    frame_path = Path(frames_dir) / f"frame_{frame_idx:09d}.npy"
+    np.save(frame_path, frame)
+
+
+class _NpyFrameSequence:
+    """Re-iterable, lazily-loading view over frames saved as ``.npy`` files.
+
+    pvio's ``write_frames_to_video`` accepts any re-iterable yielding uint8
+    ``(H, W, C)`` arrays and may iterate it more than once (GPU→CPU fallback),
+    so frames are loaded from disk on demand rather than held in memory. It also
+    indexes ``frames[0]`` to determine the output size, hence ``__getitem__``.
+    """
+
+    def __init__(self, paths: list[Path | str]):
+        self._paths = list(paths)
+
+    def __len__(self) -> int:
+        return len(self._paths)
+
+    def __getitem__(self, index: int) -> np.ndarray:
+        return np.load(self._paths[index])
+
+    def __iter__(self):
+        for path in self._paths:
+            yield np.load(path)
+
+
+def _failed_workers(workers: list[mp.Process]) -> list[tuple[int | None, int | None]]:
+    """Return (pid, exitcode) for every worker that has exited with a non-zero code.
+
+    Workers that are still running (exitcode is None) or exited cleanly (0) are
+    excluded.
+    """
+    return [
+        (p.pid, p.exitcode)
+        for p in workers
+        if p.exitcode is not None and p.exitcode != 0
+    ]
+
+
+def _abort_workers(workers: list[mp.Process]) -> None:
+    """Terminate any still-running workers and reap them all.
+
+    Called when one worker has already failed: the survivors are blocked waiting
+    on a queue that will never be drained, so there is nothing to salvage.
+    """
+    for p in workers:
+        if p.is_alive():
+            p.terminate()
+    for p in workers:
+        p.join()
+
+
+def _put_or_abort(task_queue: mp.Queue, item: Any, workers: list[mp.Process]) -> None:
+    """Put ``item`` on ``task_queue``, aborting if a worker dies while we wait.
+
+    The queue is bounded, so ``put`` blocks once it is full. If a worker has
+    crashed it will never drain the queue again, which would block the producer
+    forever. Instead we put with a timeout and, whenever the queue stays full,
+    check whether any worker has died; if so we tear down the remaining workers
+    and raise rather than hang.
+    """
+    while True:
+        try:
+            task_queue.put(item, timeout=1.0)
+            return
+        except queue.Full:
+            failed = _failed_workers(workers)
+            if failed:
+                _abort_workers(workers)
+                details = ", ".join(
+                    f"pid {pid} exited with code {code}" for pid, code in failed
+                )
+                raise RuntimeError(f"One or more worker processes failed: {details}")
 
 
 def _worker_process(
@@ -341,6 +500,10 @@ def _worker_process(
     1. Calls setup() once to initialize the figure (unless reuse_figure_object is False)
     2. Repeatedly pulls individual frames from the task queue
     3. Renders each frame
+
+    The Animator instance is pickled and sent to every worker. See the Animator
+    class docstring for the implications of stashing large data on instance
+    attributes.
     """
     fig = None
     if reuse_figure_object:
@@ -356,8 +519,7 @@ def _worker_process(
         if not reuse_figure_object:
             fig = animator._setup_and_check()
         animator.update(frame_idx, params)
-        frame_path = Path(frames_dir) / f"frame_{frame_idx:09d}.png"
-        fig.savefig(frame_path, **savefig_params)
+        _save_frame(fig, frames_dir, frame_idx, savefig_params)
         frames_processed += 1
         if not reuse_figure_object:
             plt.close(fig)
@@ -375,67 +537,51 @@ def _merge_frames_into_video(
     frames_dir: Path | str,
     output_file: Path | str,
     fps: int,
-    video_codec: str,
-    video_pixfmt: str,
-    video_params: dict[str, Any],
+    video_mode: str,
+    video_quality: int | None,
+    video_preset: str | None,
+    video_extra_ffmpeg_params: list[str] | None,
     disable_progress_bar: bool | None,
     logger: logging.Logger,
     log_interval: int | None,
 ) -> None:
-    """Use PyAV to merge frames into video."""
-    # Gather frame files in sorted order
-    frame_files = sorted(Path(frames_dir).glob("frame_*.png"))
+    """Use parallel-video-io (pvio) to merge frames into an H.264 MP4.
+
+    Frames are stored as raw ``.npy`` RGB arrays (see :func:`_save_frame`) and
+    streamed to pvio lazily, so no PNG decode step is needed. pvio handles
+    even-dimension and pixel-format requirements internally, and picks the GPU
+    (NVENC) or CPU (libx264) encoder according to ``video_mode``.
+    """
+    # Gather frame files in sorted (i.e. frame-index) order
+    frame_files = sorted(Path(frames_dir).glob("frame_*.npy"))
 
     if not frame_files:
         raise RuntimeError("No frames found in temporary directory")
 
-    # Open first image to determine size and ensure even dimensions
-    with Image.open(frame_files[0]) as first_img:
-        width, height = first_img.size
-    # Make width/height even (required by many codecs)
-    width = (width // 2) * 2
-    height = (height // 2) * 2
+    Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+
+    encode_kwargs: dict[str, Any] = {
+        "mode": video_mode,
+        "preset": video_preset,
+        "extra_ffmpeg_params": video_extra_ffmpeg_params,
+        "log_interval": log_interval,
+        "quiet": bool(disable_progress_bar),
+    }
+    # Only override pvio's default quality when the user requested a specific value.
+    if video_quality is not None:
+        encode_kwargs["quality"] = video_quality
 
     try:
-        Path(output_file).parent.mkdir(parents=True, exist_ok=True)
-        container = av.open(str(output_file), mode="w")
-        stream = container.add_stream(video_codec, rate=fps)
-        stream.width = width
-        stream.height = height
-        stream.pix_fmt = video_pixfmt
-        stream.options.update(video_params)
-
-        # Encode each frame
-        for i, frame_path in tqdm(
-            enumerate(frame_files),
-            total=len(frame_files),
-            desc="Merging frames",
-            disable=disable_progress_bar,
-        ):
-            with Image.open(frame_path) as img:
-                img = img.convert("RGB")
-                # Ensure image has the right size
-                if img.size != (width, height):
-                    img = img.resize((width, height))
-
-                video_frame = av.VideoFrame.from_image(img)
-            video_frame = video_frame.reformat(width, height, format=video_pixfmt)
-            for packet in stream.encode(video_frame):
-                container.mux(packet)
-
-            # Optional interval logging
-            if log_interval and (i + 1) % log_interval == 0:
-                logger.info(f"Frame written {i + 1}/{len(frame_files)} to video")
-
-        # Flush encoder
-        for packet in stream.encode(None):
-            container.mux(packet)
-
-        container.close()
+        pvio.write_frames_to_video(
+            output_file,
+            _NpyFrameSequence(frame_files),
+            fps,
+            **encode_kwargs,
+        )
 
         size_mb = Path(output_file).stat().st_size / (1024 * 1024)
         logger.info(f"Video created: {output_file} ({size_mb:.2f} MB)")
 
     except Exception as e:
-        logger.critical(f"PyAV failed to create video: {e}")
+        logger.critical(f"parallel-video-io failed to create video: {e}")
         raise

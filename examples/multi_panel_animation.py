@@ -137,7 +137,7 @@ if __name__ == "__main__":
 
     # Create animation
     anim = MultiPanelAnimation()
-    output_path = Path("example_output/multi_panel_animation.mp4")
+    output_path = Path("examples/output/multi_panel_animation.mp4")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     anim.make_video(
         output_file=output_path, param_by_frame=params, fps=30, num_workers=8

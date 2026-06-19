@@ -1,5 +1,6 @@
 """AI-generated unit tests"""
 
+import threading
 import unittest
 import tempfile
 import numpy as np
@@ -7,6 +8,18 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 from parallel_animate import Animator, IndexedFrameParams
+
+
+class FailingAnimation(Animator):
+    """Animation whose update() always raises, to simulate a crashing worker."""
+
+    def setup(self):
+        fig, ax = plt.subplots(figsize=(2, 2))
+        (self.line,) = ax.plot([0, 1], [0, 1])
+        return fig
+
+    def update(self, frame_idx, params):
+        raise RuntimeError("boom")
 
 
 class SimpleTestAnimation(Animator):
@@ -453,6 +466,65 @@ class TestIndexedFrameParams(unittest.TestCase):
 
             self.assertTrue(output_path.exists())
 
+    def test_duplicate_frame_id_raises_serial(self):
+        """Repeated IndexedFrameParams frame_id must raise, not overwrite a frame."""
+        params = [
+            IndexedFrameParams(frame_id=1, params={"phase": 0.0}),
+            IndexedFrameParams(frame_id=1, params={"phase": 1.0}),
+        ]
+        anim = SimpleTestAnimation()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                anim.make_video(
+                    output_file=Path(tmpdir) / "dup.mp4",
+                    param_by_frame=params,
+                    fps=10,
+                    num_workers=1,
+                    disable_progress_bar=True,
+                )
+
+    def test_duplicate_frame_id_raises_parallel(self):
+        """Duplicate frame ids must also be rejected (and not hang) in parallel mode."""
+        params = [
+            IndexedFrameParams(frame_id=1, params={"phase": 0.0}),
+            IndexedFrameParams(frame_id=1, params={"phase": 1.0}),
+        ]
+        anim = SimpleTestAnimation()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                anim.make_video(
+                    output_file=Path(tmpdir) / "dup_parallel.mp4",
+                    param_by_frame=params,
+                    fps=10,
+                    num_workers=2,
+                    disable_progress_bar=True,
+                )
+
+    def test_indexed_and_positional_index_collision_raises(self):
+        """An explicit frame_id colliding with a positional (enumerate) index raises.
+
+        Before validation covered all indices, the positional frame at index 1
+        and the IndexedFrameParams with frame_id=1 would map to the same output
+        file and one would silently overwrite the other.
+        """
+        params = [
+            {"phase": 0.0},  # positional index 0
+            {"phase": 0.1},  # positional index 1
+            IndexedFrameParams(
+                frame_id=1, params={"phase": 0.2}
+            ),  # collides with index 1
+        ]
+        anim = SimpleTestAnimation()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                anim.make_video(
+                    output_file=Path(tmpdir) / "collision.mp4",
+                    param_by_frame=params,
+                    fps=10,
+                    num_workers=1,
+                    disable_progress_bar=True,
+                )
+
     def test_indexed_params_with_generator(self):
         """IndexedFrameParams should work with generators."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -515,6 +587,46 @@ class TestVideoParameters(unittest.TestCase):
             )
 
             self.assertTrue(output_path.exists())
+
+
+class TestWorkerFailure(unittest.TestCase):
+    """Parallel rendering must surface worker crashes instead of deadlocking."""
+
+    def test_parallel_worker_failure_raises_without_hanging(self):
+        """A crashing worker should raise RuntimeError promptly, not hang.
+
+        With a bounded task queue, a dead worker stops draining frames; the
+        producer must detect the failure rather than block forever filling a
+        queue nobody is consuming. We enqueue far more frames than the queue can
+        hold (preload_factor * num_workers) so the producer is guaranteed to hit
+        a full queue, and guard the call with a watchdog thread.
+        """
+        result = {}
+
+        def run():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                output_path = Path(tmpdir) / "fail.mp4"
+                try:
+                    FailingAnimation().make_video(
+                        output_file=output_path,
+                        param_by_frame=[{"phase": 0.0}] * 200,
+                        fps=10,
+                        num_workers=2,
+                        preload_factor=2,
+                        disable_progress_bar=True,
+                    )
+                    result["error"] = None
+                except Exception as exc:  # noqa: BLE001 - we assert the type below
+                    result["error"] = exc
+
+        worker = threading.Thread(target=run)
+        worker.start()
+        worker.join(timeout=60)
+
+        self.assertFalse(
+            worker.is_alive(), "make_video hung instead of reporting worker failure"
+        )
+        self.assertIsInstance(result["error"], RuntimeError)
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ if __name__ == "__main__":
 
     # Create and render
     anim = WaveAnimation()
-    output_path = Path("example_output/simple_wave_animation.mp4")
+    output_path = Path("examples/output/simple_wave_animation.mp4")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     anim.make_video(
         output_file=output_path, param_by_frame=params, fps=30, num_workers=4

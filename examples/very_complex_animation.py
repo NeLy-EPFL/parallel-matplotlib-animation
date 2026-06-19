@@ -281,7 +281,7 @@ class VeryComplexAnimation(Animator):
         self.artists["stats_text"] = self.ax9.text(
             0.95,
             0.95,
-            f"μ = 0.00\nσ = 1.00\nN = 1000",
+            "μ = 0.00\nσ = 1.00\nN = 1000",
             transform=self.ax9.transAxes,
             fontsize=9,
             verticalalignment="top",
@@ -627,7 +627,7 @@ if __name__ == "__main__":
 
     # Create and render
     anim = VeryComplexAnimation()
-    output_path = Path("example_output/very_complex_animation.mp4")
+    output_path = Path("examples/output/very_complex_animation.mp4")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     anim.make_video(
         output_file=output_path, param_by_frame=params, fps=30, num_workers=8
