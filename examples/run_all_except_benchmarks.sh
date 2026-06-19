@@ -5,7 +5,7 @@
 # invoked directly from the command line.
 #
 # Usage:
-#   ./examples/run_all.sh
+#   ./examples/run_all_except_benchmarks.sh
 
 set -euo pipefail
 
