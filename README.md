@@ -63,7 +63,7 @@ anim = WaveAnimation()
 anim.make_video("wave.mp4", param_by_frame=params, fps=30, num_workers=4)
 ```
 
-<img src="assets/simple_wave_animation.gif" width="480"/>
+<video src="https://sibocw.github.io/parallel-matplotlib-animation/output/simple_wave_animation.mp4" width="480" autoplay loop muted playsinline controls></video>
 
 ## Usage
 This library has a single class: `parallel_animate.Animator`. To make an animation, you must create your own class inheriting from it and define the following methods:
@@ -98,22 +98,22 @@ See [`examples/`](https://github.com/sibocw/parallel-matplotlib-animation/blob/m
 
 `multi_panel_animation.py`: 5 subplots with different plot types
 
-<img src="assets/multi_panel_animation.gif" width="480"/>
+<video src="https://sibocw.github.io/parallel-matplotlib-animation/output/multi_panel_animation.mp4" width="480" autoplay loop muted playsinline controls></video>
 
 `very_complex_animation.py`: 14 subplots with GridSpec layout
 
-<img src="assets/very_complex_animation.gif" width="480"/>
+<video src="https://sibocw.github.io/parallel-matplotlib-animation/output/very_complex_animation.mp4" width="480" autoplay loop muted playsinline controls></video>
 
 `nondeterministic_video_loader.py`: handling frames that arrive out of order
 
-<img src="assets/nondeterministic_video_loader.gif" width="240"/>
+<video src="https://sibocw.github.io/parallel-matplotlib-animation/output/nondeterministic_video_loader.mp4" width="240" autoplay loop muted playsinline controls></video>
 
 
 ## Performance test
 
 A [strong scaling test](https://hpc-wiki.info/hpc/Scaling_tests#Strong_Scaling) is implemented in `examples/scaling_test.py`. Here's the result on my 8-core (16-thread) Intel Core i9-11900K Processor:
 
-![](assets/scaling_graph.png)
+See the [interactive scaling figure](https://sibocw.github.io/parallel-matplotlib-animation/benchmark/) on the documentation site.
 
 The left-most blue dot indicates serial processing with resources reuse. The black line indicates ideal scaling (zero overhead) if all frames are rendered completely independently in parallel (as is the case in all parallel matplotlib animation libraries I found). Blue dots at 1+ workers are what's implemented in this library.
 

@@ -1,5 +1,9 @@
 # Usage
 
+!!! tip "Examples"
+    See [Examples](examples.md) to get started fast.
+
+
 This library has a single class: [`parallel_animate.Animator`](api/animator.md).
 To make an animation you create your own subclass and define two methods.
 

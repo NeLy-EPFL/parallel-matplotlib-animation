@@ -22,8 +22,9 @@ python examples/scaling_test.py            # full sweep
 python examples/scaling_test.py --quick    # small, fast smoke run
 ```
 
-Results are written to `example_output/scaling_test/` (`results.csv`,
-`results.json`) and the interactive figure below to `assets/scaling_graph.html`.
+Results are written to `examples/output/scaling_test/` (`results.csv`,
+`results.json`, and the interactive figure embedded below as
+`scaling_graph.html`).
 
 ## Result
 
@@ -32,7 +33,7 @@ so the curves capture both the parallel speedup and the extra gains from figure
 reuse and GPU encoding. The dashed black line is ideal (zero-overhead) linear
 scaling.
 
---8<-- "assets/scaling_graph.html"
+--8<-- "examples/output/scaling_test/scaling_graph.html"
 
 The left-most dark-blue point is serial processing with figure reuse. Points at
 2+ workers show the parallel speedup; reuse curves (darker) sit above the

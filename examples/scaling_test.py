@@ -19,10 +19,10 @@ The ``benchmark`` optional dependencies (plotly, pandas) are required::
 
 Outputs:
 
-* ``example_output/scaling_test/results.csv``  -- one row per configuration
-* ``example_output/scaling_test/results.json`` -- same data as JSON
-* ``assets/scaling_graph.html``                -- interactive Plotly figure
-  (embedded in the documentation site)
+* ``examples/output/scaling_test/results.csv``  -- one row per configuration
+* ``examples/output/scaling_test/results.json`` -- same data as JSON
+* ``examples/output/scaling_test/scaling_graph.html`` -- interactive Plotly
+  figure (embedded in the documentation site)
 """
 
 from __future__ import annotations
@@ -40,8 +40,8 @@ from very_complex_animation import VeryComplexAnimation
 
 # Repository-root-relative locations (this script lives in examples/).
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_OUTPUT_DIR = _REPO_ROOT / "example_output" / "scaling_test"
-_FIGURE_PATH = _REPO_ROOT / "assets" / "scaling_graph.html"
+_OUTPUT_DIR = _REPO_ROOT / "examples" / "output" / "scaling_test"
+_FIGURE_PATH = _OUTPUT_DIR / "scaling_graph.html"
 
 # Two-tone colour scheme: CPU encode in blue, GPU encode in magenta; the darker
 # shade is "with figure reuse" (the mode this library is built around).

@@ -63,10 +63,14 @@ anim = WaveAnimation()
 anim.make_video("wave.mp4", param_by_frame=params, fps=30, num_workers=4)
 ```
 
-![Simple wave animation](https://raw.githubusercontent.com/sibocw/parallel-matplotlib-animation/main/assets/simple_wave_animation.gif)
+<div style="text-align:center;margin:1em 0;">
+<video src="output/simple_wave_animation.mp4" autoplay loop muted playsinline controls
+       style="width:100%;max-width:560px;border-radius:6px;">
+Your browser does not support the video tag.
+</video>
+</div>
 
-Continue to [Usage](usage.md) for the full API, or browse the
-[examples](examples.md).
+Continue to [Usage](usage.md) for a more detaield explanation, [API Reference] for the full API, or browse the [examples](examples.md).
 
 !!! note "Linux only"
     parallel-video-io (the encoding backend) is currently Linux-only.

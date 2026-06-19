@@ -26,6 +26,7 @@ theme:
 
 hooks:
   - docs/gen_benchmark.py
+  - docs/embed_example_videos.py
 
 plugins:
   - search

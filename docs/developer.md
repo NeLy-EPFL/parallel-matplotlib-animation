@@ -34,7 +34,8 @@ mkdocs build          # build the static site into site/
 mkdocs gh-deploy      # build and push to the gh-pages branch
 ```
 
-The [benchmark page](benchmark.md) embeds `assets/scaling_graph.html`, produced
+The [benchmark page](benchmark.md) embeds
+`examples/output/scaling_test/scaling_graph.html`, produced
 by `python examples/scaling_test.py`. If that file is missing at build time, a
 placeholder is substituted by the `docs/gen_benchmark.py` hook so the build still
 succeeds.
