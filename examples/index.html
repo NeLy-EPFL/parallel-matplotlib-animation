@@ -626,27 +626,74 @@
 
 
 <h1 id="examples">Examples</h1>
-<p>Runnable example scripts live in
-<a href="https://github.com/sibocw/parallel-matplotlib-animation/tree/main/examples"><code>examples/</code></a>.
-Run all of them (except the benchmark) with:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>./examples/run_all_except_benchmarks.sh
-</code></pre></div>
+<p>Runnable example scripts live in <a href="https://github.com/sibocw/parallel-matplotlib-animation/tree/main/examples"><code>examples/</code></a>.</p>
+<hr />
 <h2 id="simple_wave_animationpy"><code>simple_wave_animation.py</code></h2>
 <p>A single oscillating cosine wave — the <a href="../#quick-example">quick example</a>.</p>
-<p><img alt="Simple wave animation" src="https://raw.githubusercontent.com/sibocw/parallel-matplotlib-animation/main/assets/simple_wave_animation.gif" /></p>
+<div style="text-align:center;margin:1em 0;">
+<a href="https://github.com/NeLy-EPFL/parallel-matplotlib-animation/blob/main/examples/simple_wave_animation.py" target="_blank" rel="noopener"
+   style="display:inline-block;padding:0.25em 0.9em;font-size:0.8em;font-weight:400;background:var(--md-primary-fg-color);color:var(--md-primary-bg-color);border-radius:6px;text-decoration:none;">
+See source code ↗</a>
+</div>
+
+<div style="text-align:center;margin:1em 0;">
+<video src="../output/simple_wave_animation.mp4" autoplay loop muted playsinline controls
+       style="width:100%;border-radius:6px;">
+Your browser does not support the video tag.
+</video>
+</div>
+
+<hr />
 <h2 id="multi_panel_animationpy"><code>multi_panel_animation.py</code></h2>
 <p>Five subplots with different plot types updating together.</p>
-<p><img alt="Multi-panel animation" src="https://raw.githubusercontent.com/sibocw/parallel-matplotlib-animation/main/assets/multi_panel_animation.gif" /></p>
+<div style="text-align:center;margin:1em 0;">
+<a href="https://github.com/NeLy-EPFL/parallel-matplotlib-animation/blob/main/examples/http://multi_panel_animation.py" target="_blank" rel="noopener"
+   style="display:inline-block;padding:0.25em 0.9em;font-size:0.8em;font-weight:400;background:var(--md-primary-fg-color);color:var(--md-primary-bg-color);border-radius:6px;text-decoration:none;">
+See source code ↗</a>
+</div>
+
+<div style="text-align:center;margin:1em 0;">
+<video src="../output/multi_panel_animation.mp4" autoplay loop muted playsinline controls
+       style="width:100%;border-radius:6px;">
+Your browser does not support the video tag.
+</video>
+</div>
+
+<hr />
 <h2 id="very_complex_animationpy"><code>very_complex_animation.py</code></h2>
 <p>A 14-subplot <code>GridSpec</code> layout — the figure used by the
 <a href="../benchmark/">benchmark</a>. It showcases how much the setup-once / update-many
 design saves when the layout is expensive to build.</p>
-<p><img alt="Very complex animation" src="https://raw.githubusercontent.com/sibocw/parallel-matplotlib-animation/main/assets/very_complex_animation.gif" /></p>
+<div style="text-align:center;margin:1em 0;">
+<a href="https://github.com/NeLy-EPFL/parallel-matplotlib-animation/blob/main/examples/very_complex_animation.py" target="_blank" rel="noopener"
+   style="display:inline-block;padding:0.25em 0.9em;font-size:0.8em;font-weight:400;background:var(--md-primary-fg-color);color:var(--md-primary-bg-color);border-radius:6px;text-decoration:none;">
+See source code ↗</a>
+</div>
+
+<div style="text-align:center;margin:1em 0;">
+<video src="../output/very_complex_animation.mp4" autoplay loop muted playsinline controls
+       style="width:100%;border-radius:6px;">
+Your browser does not support the video tag.
+</video>
+</div>
+
+<hr />
 <h2 id="nondeterministic_video_loaderpy"><code>nondeterministic_video_loader.py</code></h2>
 <p>Handling frames whose parameters arrive out of order, using
 <a href="../api/animator/"><code>IndexedFrameParams</code></a>. Useful when frames are decoded by a
 parallel dataloader that returns them non-deterministically.</p>
-<p><img alt="Non-deterministic video loader" src="https://raw.githubusercontent.com/sibocw/parallel-matplotlib-animation/main/assets/nondeterministic_video_loader.gif" /></p>
+<div style="text-align:center;margin:1em 0;">
+<a href="https://github.com/NeLy-EPFL/parallel-matplotlib-animation/blob/main/examples/nondeterministic_video_loader.py" target="_blank" rel="noopener"
+   style="display:inline-block;padding:0.25em 0.9em;font-size:0.8em;font-weight:400;background:var(--md-primary-fg-color);color:var(--md-primary-bg-color);border-radius:6px;text-decoration:none;">
+See source code ↗</a>
+</div>
+
+<div style="text-align:center;margin:1em 0;">
+<video src="../output/nondeterministic_video_loader.mp4" autoplay loop muted playsinline controls
+       style="width:100%;border-radius:6px;">
+Your browser does not support the video tag.
+</video>
+</div>
 
 
 
