@@ -383,9 +383,7 @@ def _resolved_frames(param_by_frame: Iterable[Any], n_frames: int | None):
         yield frame_idx, params
 
 
-def _figure_to_rgb_array(
-    fig: plt.Figure, savefig_params: dict[str, Any]
-) -> np.ndarray:
+def _figure_to_rgb_array(fig: plt.Figure, savefig_params: dict[str, Any]) -> np.ndarray:
     """Rasterise ``fig`` to a contiguous ``(H, W, 3)`` uint8 RGB array.
 
     Pixels are read straight from the Agg canvas buffer, skipping PNG
@@ -444,7 +442,9 @@ def _failed_workers(workers: list[mp.Process]) -> list[tuple[int | None, int | N
     excluded.
     """
     return [
-        (p.pid, p.exitcode) for p in workers if p.exitcode is not None and p.exitcode != 0
+        (p.pid, p.exitcode)
+        for p in workers
+        if p.exitcode is not None and p.exitcode != 0
     ]
 
 
@@ -481,9 +481,7 @@ def _put_or_abort(task_queue: mp.Queue, item: Any, workers: list[mp.Process]) ->
                 details = ", ".join(
                     f"pid {pid} exited with code {code}" for pid, code in failed
                 )
-                raise RuntimeError(
-                    f"One or more worker processes failed: {details}"
-                )
+                raise RuntimeError(f"One or more worker processes failed: {details}")
 
 
 def _worker_process(

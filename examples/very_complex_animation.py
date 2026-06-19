@@ -281,7 +281,7 @@ class VeryComplexAnimation(Animator):
         self.artists["stats_text"] = self.ax9.text(
             0.95,
             0.95,
-            f"μ = 0.00\nσ = 1.00\nN = 1000",
+            "μ = 0.00\nσ = 1.00\nN = 1000",
             transform=self.ax9.transAxes,
             fontsize=9,
             verticalalignment="top",

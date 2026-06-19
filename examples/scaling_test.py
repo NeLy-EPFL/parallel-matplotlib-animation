@@ -46,9 +46,9 @@ _FIGURE_PATH = _REPO_ROOT / "assets" / "scaling_graph.html"
 # Two-tone colour scheme: CPU encode in blue, GPU encode in magenta; the darker
 # shade is "with figure reuse" (the mode this library is built around).
 _COLOR = {
-    ("cpu", True): "#0c2e6e",   # CPU encode, with cache -- dark blue
+    ("cpu", True): "#0c2e6e",  # CPU encode, with cache -- dark blue
     ("cpu", False): "#90c4e4",  # CPU encode, no cache    -- light blue
-    ("gpu", True): "#7a0042",   # GPU encode, with cache  -- dark magenta
+    ("gpu", True): "#7a0042",  # GPU encode, with cache  -- dark magenta
     ("gpu", False): "#f0a0c4",  # GPU encode, no cache    -- light pink
 }
 
@@ -124,7 +124,9 @@ def add_speedup(df: pd.DataFrame) -> pd.DataFrame:
     the extra gains from figure reuse and GPU encoding on a common scale.
     """
     df = df.copy()
-    baseline_mode = "cpu" if "cpu" in df["video_mode"].values else df["video_mode"].iloc[0]
+    baseline_mode = (
+        "cpu" if "cpu" in df["video_mode"].values else df["video_mode"].iloc[0]
+    )
     baseline = df[
         (df["num_workers"] == df["num_workers"].min())
         & (~df["reuse_fig_obj"])
@@ -184,7 +186,9 @@ def plot_scaling_results(df: pd.DataFrame, output_path: Path) -> None:
         hovermode="closest",
         legend_title_text="Configuration",
     )
-    fig.update_xaxes(tickvals=num_workers_list, ticktext=[str(n) for n in num_workers_list])
+    fig.update_xaxes(
+        tickvals=num_workers_list, ticktext=[str(n) for n in num_workers_list]
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.write_html(str(output_path), include_plotlyjs="cdn", full_html=False)
@@ -192,9 +196,7 @@ def plot_scaling_results(df: pd.DataFrame, output_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--quick", action="store_true", help="small, fast smoke run"
-    )
+    parser.add_argument("--quick", action="store_true", help="small, fast smoke run")
     parser.add_argument(
         "--no-gpu", action="store_true", help="skip the GPU (NVENC) encode backend"
     )

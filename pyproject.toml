@@ -36,7 +36,7 @@ benchmark = [
 ]
 
 [project.urls]
-Repository = "https://github.com/sibocw/parallel-matplotlib-animation"
+Repository = "https://github.com/nely-epfl/parallel-matplotlib-animation"
 
 [build-system]
 requires = ["hatchling"]

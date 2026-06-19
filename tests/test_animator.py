@@ -510,7 +510,9 @@ class TestIndexedFrameParams(unittest.TestCase):
         params = [
             {"phase": 0.0},  # positional index 0
             {"phase": 0.1},  # positional index 1
-            IndexedFrameParams(frame_id=1, params={"phase": 0.2}),  # collides with index 1
+            IndexedFrameParams(
+                frame_id=1, params={"phase": 0.2}
+            ),  # collides with index 1
         ]
         anim = SimpleTestAnimation()
         with tempfile.TemporaryDirectory() as tmpdir:
