@@ -1,6 +1,6 @@
 [project]
 name = "parallel-matplotlib-animation"
-version = "0.1.3"
+version = "0.1.4"
 description = "Animate matplotlib figures into videos, in parallel but with efficient caching"
 authors = [
     { name = "Sibo Wang-Chen", email = "sibo.wang@epfl.ch" }
@@ -11,7 +11,7 @@ dependencies = [
     "matplotlib>=3.10.0",
     "numpy>=2,<3",
     "tqdm>=4.67",
-    "parallel-video-io==0.1.8",
+    "parallel-video-io==0.1.9",
 ]
 
 [project.optional-dependencies]
